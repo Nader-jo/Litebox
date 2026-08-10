@@ -231,6 +231,7 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | [Threat model](docs/THREAT_MODEL.md) | Security reviewers |
 | [Development](docs/DEVELOPMENT.md) | Contributors |
 | [Release process](docs/RELEASES.md) | Maintainers |
+| [Repository settings](docs/REPOSITORY_SETTINGS.md) | Repository administrators |
 | [Roadmap](ROADMAP.md) | Community |
 | [Contributing](CONTRIBUTING.md) | Contributors |
 | [Governance](GOVERNANCE.md) | Maintainers and contributors |

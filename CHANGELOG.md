@@ -17,5 +17,7 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 ### Security
 
 - Require Go 1.26.5 or newer so CI, release builds, and contributors use a toolchain containing the current Go standard-library security fixes.
+- Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
+- Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
 [Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...HEAD

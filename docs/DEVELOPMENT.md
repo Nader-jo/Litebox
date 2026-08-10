@@ -53,6 +53,8 @@ Generated files are committed. CI regenerates them and rejects drift. Browser as
 make test
 make test-race
 make lint
+make workflow-lint
+make release-check
 make vuln
 ```
 
