@@ -14,4 +14,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Keyset pagination, documented REST compatibility routes, and per-user send throttling.
 - Hardened container, CI, security scanning, SBOM-enabled releases, and community documentation.
 
+### Security
+
+- Require Go 1.26.5 or newer so CI, release builds, and contributors use a toolchain containing the current Go standard-library security fixes.
+
 [Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...HEAD
