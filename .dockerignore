@@ -1,0 +1,14 @@
+.git
+.github
+.data
+.data-*
+data
+bin
+dist
+coverage
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+docs/images

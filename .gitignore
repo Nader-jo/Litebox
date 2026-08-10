@@ -1,0 +1,32 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Build and test output
+/bin/
+/dist/
+/coverage/
+coverage.out
+*.test
+*.prof
+
+# Local runtime state
+/.data/
+/.data-*/
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log

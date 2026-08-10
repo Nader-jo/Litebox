@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support and questions
+    url: https://github.com/Nader-jo/Litebox/discussions
+    about: Ask setup and operational questions in Discussions.
+  - name: Security vulnerability
+    url: https://github.com/Nader-jo/Litebox/security/advisories/new
+    about: Report security issues privately. Do not open a public issue.

@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible problem in Litebox.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Litebox. Remove private email data, secrets, cookies, and API keys before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Litebox version
+      description: Use the release tag or the output of `mailbox version`.
+      placeholder: v1.2.3
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker Compose
+        - Docker or another OCI runtime
+        - Native binary
+        - Source checkout
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, browser, reverse proxy, and other relevant versions.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start with ...
+        2. Navigate to ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and redacted logs
+      description: Include the smallest relevant log excerpt. Never attach databases or mailbox content.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste the redacted output of `mailbox doctor --deep` when relevant.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I removed credentials and private mailbox data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

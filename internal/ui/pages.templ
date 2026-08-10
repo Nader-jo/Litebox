@@ -1,0 +1,411 @@
+package ui
+
+import (
+	"fmt"
+	"time"
+	"github.com/Nader-jo/Litebox/internal/model"
+)
+
+templ Document(title string, body templ.Component) {
+	<!doctype html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="color-scheme" content="light"/>
+			<title>{ title } · Litebox</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script defer src="/static/htmx.min.js"></script>
+			<script defer src="/static/app.js"></script>
+		</head>
+		@body
+	</html>
+}
+
+templ Brand() {
+	<a class="brand" href="/inbox" aria-label="Litebox inbox">
+		<span class="brand-mark" aria-hidden="true">
+			<svg viewBox="0 0 32 32" role="img"><path d="M5.5 8.5h21v15h-21z"></path><path d="m6.5 10 9.5 7 9.5-7"></path></svg>
+		</span>
+		<span>Litebox</span>
+	</a>
+}
+
+templ LoginPage(data PageData) {
+	@Document("Sign in", LoginBody(data))
+}
+
+templ LoginBody(data PageData) {
+	<body class="auth-page">
+		<main class="auth-card">
+			@Brand()
+			<div class="auth-copy">
+				<p class="eyebrow">Private by design</p>
+				<h1>Welcome back</h1>
+				<p>Sign in to { data.PrimaryAddress }</p>
+			</div>
+			if data.Error != "" {
+				<div class="alert alert-error" role="alert">{ data.Error }</div>
+			}
+			<form method="post" action="/login" class="stack">
+				<label>Email<input name="email" type="email" autocomplete="username" required autofocus/></label>
+				<label>Password<input name="password" type="password" autocomplete="current-password" required/></label>
+				<button class="button button-primary button-wide" type="submit">Sign in</button>
+			</form>
+			<p class="auth-note">One small mailbox. No tracking, no ads, no mail server to operate.</p>
+		</main>
+	</body>
+}
+
+templ SetupPage(data PageData) {
+	@Document("First-run setup", SetupBody(data))
+}
+
+templ SetupBody(data PageData) {
+	<body class="auth-page">
+		<main class="auth-card auth-card-wide">
+			@Brand()
+			<div class="auth-copy">
+				<p class="eyebrow">First-run setup</p>
+				<h1>Create your administrator</h1>
+				<p>This is the only user for this Litebox installation.</p>
+			</div>
+			if data.Error != "" {
+				<div class="alert alert-error" role="alert">{ data.Error }</div>
+			}
+			<form method="post" action="/setup" class="stack">
+				<label>Administrator email<input name="email" type="email" autocomplete="username" required autofocus/></label>
+				<label>Display name<input name="display_name" type="text" autocomplete="name" required/></label>
+				<div class="field-grid">
+					<label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" required/><small>At least 12 characters.</small></label>
+					<label>Confirm password<input name="password_confirmation" type="password" autocomplete="new-password" minlength="12" required/></label>
+				</div>
+				<button class="button button-primary button-wide" type="submit">Create administrator</button>
+			</form>
+		</main>
+	</body>
+}
+
+templ MailboxPage(data PageData) {
+	@Document(data.Title, MailboxBody(data))
+}
+
+templ MailboxBody(data PageData) {
+	<body class="app-page" hx-boost="true">
+		<meta name="csrf-token" content={ data.CSRFToken }/>
+		<header class="topbar">
+			<button class="icon-button menu-button" type="button" data-sidebar-toggle aria-label="Open navigation" aria-controls="mailbox-navigation" aria-expanded="false">☰</button>
+			@Brand()
+			<form class="search" method="get" action="/search" role="search">
+				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.2-4.2m1.2-5.3a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"></path></svg>
+				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail"/>
+			</form>
+			<div class="account">
+				<span class="avatar" aria-hidden="true">{ fmt.Sprintf("%.1s", data.User.DisplayName) }</span>
+				<div><strong>{ data.User.DisplayName }</strong><small>{ data.PrimaryAddress }</small></div>
+				<form method="post" action="/logout"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Sign out</button></form>
+			</div>
+		</header>
+		<div class="app-shell">
+			@Sidebar(data)
+			<main class="workspace">
+				if data.Error != "" {
+					<div class="alert alert-error" role="alert">{ data.Error }</div>
+				}
+				if data.Notice != "" {
+					<div class="alert alert-success" role="status">{ data.Notice }</div>
+				}
+				if data.Draft != nil {
+					@Composer(data, *data.Draft)
+				} else if data.CurrentFolder == "drafts" {
+					@DraftList(data)
+				} else if data.CurrentFolder == "admin" {
+					@AdminPanel(data)
+				} else {
+					@MailboxWorkspace(data)
+				}
+			</main>
+		</div>
+		<button class="sidebar-backdrop" type="button" data-sidebar-toggle aria-label="Close navigation" tabindex="-1"></button>
+	</body>
+}
+
+templ Sidebar(data PageData) {
+	<aside class="sidebar" id="mailbox-navigation" data-sidebar>
+		<a class="compose-button" href="/compose"><span aria-hidden="true">＋</span> Compose</a>
+		<nav aria-label="Mailbox folders">
+			@NavItem("/inbox", "inbox", "Inbox", "⌂", data)
+			@NavItem("/starred", "starred", "Starred", "☆", data)
+			@NavItem("/sent", "sent", "Sent", "↗", data)
+			@NavItem("/drafts", "drafts", "Drafts", "□", data)
+			@NavItem("/archive", "archive", "Archive", "▣", data)
+			@NavItem("/trash", "trash", "Trash", "⌫", data)
+		</nav>
+		<div class="sidebar-footer">
+			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/admin/system"><span>⚙</span> System</a>
+			<div class="storage-pill"><span class="status-dot"></span> Local-first storage</div>
+		</div>
+	</aside>
+}
+
+templ NavItem(href string, key string, label string, icon string, data PageData) {
+	<a class={ "nav-item", templ.KV("active", data.CurrentFolder == key) } href={ templ.SafeURL(href) }><span aria-hidden="true">{ icon }</span>{ label }</a>
+}
+
+templ MailboxWorkspace(data PageData) {
+	<section class="thread-column" aria-label={ folderTitle(data.CurrentFolder) }>
+		<div class="section-header">
+			<div><p class="eyebrow">{ data.PrimaryAddress }</p><h1>{ folderTitle(data.CurrentFolder) }</h1></div>
+			<span class="count">{ fmt.Sprintf("%d", len(data.Threads)) }</span>
+		</div>
+		if len(data.Threads) == 0 {
+			@EmptyMailbox(data.CurrentFolder)
+		} else {
+			<div class="thread-list">
+				for _, item := range data.Threads {
+					@ThreadRow(item, data)
+				}
+			</div>
+		}
+		if data.NextPageURL != "" || data.FirstPageURL != "" {
+			<nav class="pagination" aria-label="Mailbox pages">
+				if data.FirstPageURL != "" {
+					<a class="button button-ghost" href={ templ.SafeURL(data.FirstPageURL) }>← Newest</a>
+				}
+				if data.NextPageURL != "" {
+					<a class="button button-secondary" href={ templ.SafeURL(data.NextPageURL) }>Older →</a>
+				}
+			</nav>
+		}
+	</section>
+	<section class="reader-column">
+		if data.Thread == nil {
+			@ReaderEmpty()
+		} else {
+			@Conversation(*data.Thread, data)
+		}
+	</section>
+}
+
+templ ThreadRow(item model.ThreadSummary, data PageData) {
+	<a href={ templ.SafeURL(threadURL(item.ID, data)) } class={ "thread-row", templ.KV("unread", item.UnreadCount > 0), templ.KV("selected", data.Thread != nil && data.Thread.ID == item.ID) }>
+		<div class="thread-row-top"><strong>{ item.Participants }</strong><time datetime={ item.LatestMessageAt.Format(time.RFC3339) }>{ relativeTime(item.LatestMessageAt) }</time></div>
+		<div class="thread-subject">
+			<span>{ displaySubject(item.Subject) }</span>
+			if item.IsStarred {
+				<span class="star" aria-label="Starred">★</span>
+			}
+		</div>
+		<p>{ item.Snippet }</p>
+		<div class="thread-meta">
+			if item.MessageCount > 1 {
+				<span>{ fmt.Sprintf("%d messages", item.MessageCount) }</span>
+			}
+			if item.HasAttachments {
+				<span>⌕ Attachment</span>
+			}
+			if item.DeliveryStatus != "" {
+				<span class={ "delivery", templ.KV("terminal", isTerminalStatus(item.DeliveryStatus)) }>{ statusLabel(item.DeliveryStatus) }</span>
+			}
+		</div>
+	</a>
+}
+
+templ EmptyMailbox(folder string) {
+	<div class="empty-state"><div class="empty-icon">✉</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p><a class="button button-secondary" href="/compose">Write a message</a></div>
+}
+
+templ ReaderEmpty() {
+	<div class="reader-empty"><div class="empty-icon">↗</div><h2>Select a conversation</h2><p>Your mail opens here, without leaving the page.</p></div>
+}
+
+templ Conversation(thread model.Thread, data PageData) {
+	<div class="conversation">
+		<div class="conversation-toolbar">
+			<a class="icon-button back-button" href={ templ.SafeURL(backURL(data)) } aria-label="Back">←</a>
+			if thread.IsTrashed {
+				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/restore") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Restore</button></form>
+				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Delete forever</button></form>
+			} else {
+				if thread.IsArchived {
+					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unarchive") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Move to Inbox</button></form>
+				} else {
+					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/archive") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Archive</button></form>
+				}
+				if thread.IsStarred {
+					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unstar") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unstar</button></form>
+				} else {
+					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/star") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Star</button></form>
+				}
+				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unread") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unread</button></form>
+				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/trash") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Trash</button></form>
+			}
+		</div>
+		<header class="conversation-header"><p class="eyebrow">{ fmt.Sprintf("%d messages", len(thread.Messages)) }</p><h1>{ displaySubject(thread.Subject) }</h1></header>
+		<div class="message-stack">
+			for _, message := range thread.Messages {
+				@MessageCard(message)
+			}
+		</div>
+		<div class="reply-bar">
+			<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>↩ Reply</a>
+			<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
+		</div>
+	</div>
+}
+
+templ MessageCard(message model.Message) {
+	<article class="message-card">
+		<header>
+			<span class="avatar avatar-message">{ fmt.Sprintf("%.1s", message.From.Name + message.From.Address) }</span>
+			<div class="message-sender">
+				<strong>
+					if message.From.Name != "" {
+						{ message.From.Name }
+					} else {
+						{ message.From.Address }
+					}
+				</strong>
+				<small>{ message.From.Address }</small>
+			</div>
+			<div class="message-time">
+				<time datetime={ message.OccurredAt.Format(time.RFC3339) }>{ fullTime(message.OccurredAt) }</time>
+				if message.DeliveryStatus != "" {
+					<span class="delivery">{ statusLabel(message.DeliveryStatus) }</span>
+				}
+			</div>
+		</header>
+		<details class="recipients">
+			<summary>to { formatAddresses(message.Recipients["to"]) }</summary>
+			<dl>
+				<dt>From</dt><dd>{ message.From.Address }</dd>
+				<dt>To</dt><dd>{ formatAddresses(message.Recipients["to"]) }</dd>
+				if len(message.Recipients["cc"]) > 0 {
+					<dt>Cc</dt><dd>{ formatAddresses(message.Recipients["cc"]) }</dd>
+				}
+			</dl>
+		</details>
+		if message.RemoteImagesBlocked {
+			<div class="blocked-images">Remote images were blocked to protect your privacy.</div>
+		}
+		if message.SanitizedHTML != "" {
+			<div class="message-body email-html">@templ.Raw(message.SanitizedHTML)</div>
+		} else {
+			<div class="message-body text-body">{ message.TextBody }</div>
+		}
+		if len(message.Attachments) > 0 {
+			<div class="attachments">
+				for _, attachment := range message.Attachments {
+					if attachment.StorageStatus == "ready" {
+						<a href={ templ.SafeURL("/attachments/" + attachment.ID) }><span>⌕</span><span><strong>{ attachment.Filename }</strong><small>{ byteSize(attachment.SizeBytes) } · { attachment.ContentType }</small></span></a>
+					} else {
+						<div class="attachment-unavailable" role="status"><span>!</span><span><strong>{ attachment.Filename }</strong><small>Attachment archival failed; retry details are available in System.</small></span></div>
+					}
+				}
+			</div>
+		}
+		if message.ProviderErrorMessage != "" {
+			<div class="alert alert-error">{ message.ProviderErrorMessage }</div>
+		}
+	</article>
+}
+
+templ Composer(data PageData, draft model.Draft) {
+	<section class="composer-page">
+		<div class="section-header"><div><p class="eyebrow">Draft</p><h1>New message</h1></div><a class="icon-button" href="/drafts" aria-label="Close composer">×</a></div>
+		if draft.ID != "" {
+			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL("/drafts/" + draft.ID + "/attachments") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">⌕ Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
+		}
+		<form class="composer-form" method="post" action={ templ.SafeURL(draftAction(draft.ID)) }>
+			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+			<input type="hidden" name="thread_id" value={ draft.ThreadID }/>
+			<input type="hidden" name="reply_to_message_id" value={ draft.ReplyToMessageID }/>
+			<div class="composer-from"><span>From</span><strong>{ data.PrimaryAddress }</strong></div>
+			<label><span>To</span><input name="to" value={ formatAddresses(draft.To) } placeholder="Jane Doe <jane@example.com>" required/></label>
+			<div class="field-grid"><label><span>Cc</span><input name="cc" value={ formatAddresses(draft.Cc) }/></label><label><span>Bcc</span><input name="bcc" value={ formatAddresses(draft.Bcc) }/></label></div>
+			<label><span>Subject</span><input name="subject" value={ draft.Subject } maxlength="998"/></label>
+			<label class="body-field"><span class="sr-only">Message</span><textarea name="body" placeholder="Write something thoughtful…" maxlength="5242880">{ draft.TextBody }</textarea></label>
+			if len(draft.Attachments) > 0 {
+				<div class="draft-attachments">
+					for _, attachment := range draft.Attachments {
+						<span>⌕ { attachment.Filename } <small>{ byteSize(attachment.SizeBytes) }</small><button class="attachment-remove" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/attachments/" + attachment.ID + "/delete") } aria-label={ "Remove " + attachment.Filename }>×</button></span>
+					}
+				</div>
+			}
+			<div class="composer-actions">
+				if draft.ID != "" {
+					<button class="button button-ghost danger" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/delete") } data-confirm="Discard this draft and its attachments? This cannot be undone.">Discard draft</button>
+				} else {
+					<button class="button button-ghost" type="submit" name="intent" value="continue">Save to add files</button>
+				}
+				<button class="button button-secondary" type="submit" name="intent" value="save">Save & close</button><button class="button button-primary" type="submit" name="intent" value="send">Send message</button>
+			</div>
+		</form>
+	</section>
+}
+
+templ DraftList(data PageData) {
+	<section class="single-column"><div class="section-header"><div><p class="eyebrow">Saved locally</p><h1>Drafts</h1></div><span class="count">{ fmt.Sprintf("%d", len(data.Drafts)) }</span></div>
+		if len(data.Drafts) == 0 {
+			@EmptyMailbox("drafts")
+		} else {
+			<div class="draft-list">
+				for _, draft := range data.Drafts {
+					<a href={ templ.SafeURL("/drafts/" + draft.ID) }><strong>{ firstRecipient(draft.To) }</strong><span>{ displaySubject(draft.Subject) }</span><p>{ draft.TextBody }</p><time>{ relativeTime(draft.UpdatedAt) }</time></a>
+				}
+			</div>
+		}
+	</section>
+}
+
+templ AdminPanel(data PageData) {
+	<section class="single-column admin-panel">
+		<div class="section-header"><div><p class="eyebrow">Operator tools</p><h1>System health</h1></div><span class={ "health-badge", templ.KV("attention", systemHealth(data) != "Healthy") }>{ systemHealth(data) }</span></div>
+		<div class="stat-grid"><div><small>Pending jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.PendingJobs) }</strong></div><div><small>Dead jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.DeadJobs) }</strong></div><div><small>Failed attachments</small><strong>{ fmt.Sprintf("%d", data.Stats.FailedAttachments) }</strong></div><div><small>Raw archive gaps</small><strong>{ fmt.Sprintf("%d", data.Stats.MissingRawMessages) }</strong></div><div><small>Database</small><strong>{ byteSize(data.Stats.DatabaseBytes) }</strong></div><div><small>Blob storage</small><strong>{ data.StorageHealth }</strong></div></div>
+		<div class="admin-section"><h2>Mailbox identity</h2><form class="settings-form" method="post" action="/settings/profile"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Display name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><label>Primary address<input value={ data.PrimaryAddress } disabled/></label><button class="button button-secondary" type="submit">Save profile</button></form></div>
+		<div class="admin-section">
+			<h2>Recent jobs</h2>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Kind</th><th>Status</th><th>Attempts</th><th>Updated</th><th></th></tr></thead>
+					<tbody>
+						for _, job := range data.Jobs {
+							<tr>
+								<td>{ job.Kind }</td>
+								<td><span class={ "job-status", "status-" + job.Status }>{ job.Status }</span></td>
+								<td>{ fmt.Sprintf("%d / %d", job.AttemptCount, job.MaxAttempts) }</td>
+								<td>{ relativeTime(job.UpdatedAt) }</td>
+								<td>
+									if job.Status == "dead" || job.Status == "failed" {
+										<form method="post" action={ templ.SafeURL("/admin/jobs/" + job.ID + "/retry") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Retry</button></form>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<div class="admin-section">
+			<h2>Recent verified webhooks</h2>
+			<div class="table-wrap">
+				<table>
+					<thead><tr><th>Event</th><th>Status</th><th>Received</th></tr></thead>
+					<tbody>
+						for _, event := range data.Webhooks {
+							<tr><td>{ event.EventType }</td><td>{ event.ProcessingStatus }</td><td>{ fullTime(event.ReceivedAt) }</td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</section>
+}
+
+templ ErrorPage(status int, message string) {
+	@Document("Something went wrong", ErrorBody(status, message))
+}
+
+templ ErrorBody(status int, message string) {
+	<body class="auth-page"><main class="auth-card"><p class="eyebrow">{ fmt.Sprintf("Error %d", status) }</p><h1>That didn’t work</h1><p>{ message }</p><a class="button button-primary" href="/inbox">Return to Inbox</a></main></body>
+}
