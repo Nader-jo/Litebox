@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-- Go 1.26 or newer;
+- Go 1.26.5 or newer (the patch-level floor includes required standard-library security fixes);
 - Docker Engine and Compose for container verification;
 - GNU Make for convenience targets (all commands can also run directly).
 
