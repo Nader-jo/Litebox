@@ -18,13 +18,13 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 
 ## Maintainer checklist
 
-1. Ensure `main` is green and the working tree is clean.
+1. Ensure `develop` is green and the working tree is clean.
 2. Review dependency and vulnerability reports.
-3. Run `make generate lint test-race vuln` and `docker compose config --quiet`.
+3. Run `make check`.
 4. Build and smoke-test the container as a non-root user.
 5. Perform a backup/restore drill for schema or storage changes.
 6. Update `CHANGELOG.md`, migration notes, docs, and supported-version policy.
-7. Choose the SemVer version and create an annotated, preferably signed, tag.
+7. Choose the SemVer version and create an annotated, preferably signed, tag from a commit contained in `develop`.
 8. Push the tag and watch the release workflow.
 9. Verify checksums, archives, SBOMs, GHCR platforms, OCI labels, and release notes.
 10. Deploy the exact version tag to a test installation and run `litebox doctor --deep`.
@@ -35,6 +35,10 @@ Consumers can verify a downloaded archive with GitHub CLI:
 ```bash
 gh attestation verify litebox_0.2.0_linux_amd64.tar.gz --repo Nader-jo/Litebox
 ```
+
+The `release` GitHub environment should require maintainer approval. The
+workflow rejects non-SemVer, lightweight, or off-branch tags before publishing
+artifacts.
 
 Example:
 

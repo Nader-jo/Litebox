@@ -6,14 +6,14 @@ with urgency and discretion.
 ## Supported versions
 
 Security fixes are released for the latest stable minor release. Users should
-upgrade to the newest patch as soon as practical. The unreleased `main` branch
+upgrade to the newest patch as soon as practical. The unreleased `develop` branch
 receives fixes but is not a supported production release.
 
 | Version | Supported |
 | --- | --- |
-| Latest stable minor | Yes |
-| Older releases | No |
-| `main` snapshots | No |
+| `0.1.x` | Yes |
+| `< 0.1.0` | No |
+| `develop` snapshots | No |
 
 ## Report a vulnerability
 

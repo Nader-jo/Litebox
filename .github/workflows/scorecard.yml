@@ -5,27 +5,44 @@ on:
   schedule:
     - cron: "17 5 * * 2"
   push:
-    branches: [main]
+    branches: [develop]
 
-permissions: read-all
+permissions: read-all # zizmor: ignore[excessive-permissions] Scorecard evaluates repository-wide read-only metadata.
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analysis:
+    name: Supply-chain scorecard
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      security-events: write
-      id-token: write
+      security-events: write # Upload results to code scanning.
+      id-token: write # Publish authenticated results for the public badge.
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: ossf/scorecard-action@99c09fe975337306107572b4fdf4db224cf8e2f2 # v2.4.3
+      - name: Analyze supply-chain posture
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
-      - uses: github/codeql-action/upload-sarif@24c7eb380a2dc368f2d129e4c65e51d172983a1e # v4
+          file_mode: git
+      - name: Retain Scorecard results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+          if-no-files-found: error
+      - name: Upload Scorecard results to code scanning
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
         with:
           sarif_file: results.sarif

@@ -11,6 +11,7 @@
 - [ ] User-visible changes are documented and added to `CHANGELOG.md`
 - [ ] Database changes use a new append-only migration
 - [ ] Generated template files are up to date
+- [ ] Workflow changes use least privilege and immutable action SHAs
 - [ ] No secrets, private email content, or personal data are included
 
 ## Compatibility and operations

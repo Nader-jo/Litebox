@@ -15,7 +15,7 @@ welcome.
 
 ## Development workflow
 
-1. Fork the repository and create a branch from `main`.
+1. Fork the repository and create a branch from `develop`.
 2. Install the Go version declared in `go.mod` and GNU Make.
 3. Run `make bootstrap` to install the pinned development tools.
 4. Make the smallest coherent change, including tests and documentation.
@@ -65,6 +65,11 @@ Keep the dependency surface small. Explain new runtime dependencies in the pull
 request and prefer the standard library where it is a good fit. Vendored browser
 assets must include their upstream version, license, source URL, and checksum in
 `NOTICE`.
+
+GitHub Actions must be pinned to full-length commit SHAs with a version comment,
+use the smallest practical token permissions, and avoid persisting checkout
+credentials. Run `make workflow-lint` after changing workflow or Dependabot
+configuration; CI also scans workflow security with zizmor.
 
 Generated files are committed so release builds do not require a template
 compiler. Run `make generate` after changing any `.templ` file, and verify that

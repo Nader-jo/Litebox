@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/Nader-jo/Litebox/actions/workflows/ci.yml/badge.svg)](https://github.com/Nader-jo/Litebox/actions/workflows/ci.yml)
 [![Security](https://github.com/Nader-jo/Litebox/actions/workflows/security.yml/badge.svg)](https://github.com/Nader-jo/Litebox/actions/workflows/security.yml)
+[![Release](https://img.shields.io/github/v/release/Nader-jo/Litebox)](https://github.com/Nader-jo/Litebox/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nader-jo/Litebox/badge)](https://scorecard.dev/viewer/?uri=github.com/Nader-jo/Litebox)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Nader-jo/Litebox)](https://goreportcard.com/report/github.com/Nader-jo/Litebox)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -231,6 +232,7 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | [Threat model](docs/THREAT_MODEL.md) | Security reviewers |
 | [Development](docs/DEVELOPMENT.md) | Contributors |
 | [Release process](docs/RELEASES.md) | Maintainers |
+| [Repository settings](docs/REPOSITORY_SETTINGS.md) | Repository administrators |
 | [Roadmap](ROADMAP.md) | Community |
 | [Contributing](CONTRIBUTING.md) | Contributors |
 | [Governance](GOVERNANCE.md) | Maintainers and contributors |
