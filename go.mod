@@ -7,7 +7,7 @@ require (
 	github.com/microcosm-cc/bluemonday v1.0.27
 	github.com/resend/resend-go/v3 v3.12.0
 	golang.org/x/crypto v0.54.0
-	golang.org/x/net v0.56.0
+	golang.org/x/net v0.57.0
 	golang.org/x/term v0.45.0
 	modernc.org/sqlite v1.56.0
 )
