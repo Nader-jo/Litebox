@@ -2,7 +2,7 @@
 
 Litebox's roadmap favors reliability and operational simplicity over feature count. Discussion issues should explain the user problem and how a proposal preserves the one-container default.
 
-## 0.1 — Reliable single mailbox
+## 0.1 — Reliable mailbox foundation
 
 - [x] secure first-run administrator and sessions;
 - [x] durable signed webhook ingestion;
@@ -10,6 +10,8 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 - [x] inbox, conversations, drafts, compose, reply, folders, and search;
 - [x] outbound idempotency and delivery-state reconciliation;
 - [x] diagnostics, backup, restore, doctor, CI, releases, and security policy;
+- [x] multiple independent mailboxes and aliases;
+- [x] multiple users, per-mailbox roles, mailbox switching, and session management;
 - [ ] wider real-provider acceptance testing and accessibility audit;
 - [ ] performance measurements at 100,000 messages.
 
@@ -25,8 +27,7 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 
 ## Later, only with demonstrated demand
 
-- multiple aliases;
-- multiple users and shared-inbox permissions;
+- shared-inbox assignment and internal notes;
 - rules and labels;
 - browser notifications;
 - simple rich-text composition;

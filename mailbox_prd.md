@@ -77,7 +77,7 @@ The **default Docker Compose deployment contains one required container**. SQLit
 
 Object storage is an optional deployment choice, not an MVP prerequisite. The code must use a `BlobStore` abstraction so an optional S3 implementation can later target RustFS, Amazon S3, Cloudflare R2, or another compatible provider.
 
-The first release is single-tenant, single-user, and centered on one primary mailbox address. The schema should avoid needless dead ends for future aliases/users, but multi-tenant SaaS behavior is out of scope.
+The deployment is a single trusted installation centered on a bootstrapped primary mailbox. It supports multiple users, independent mailboxes, aliases, per-mailbox permissions, and multiple browser sessions; hostile multi-tenant SaaS behavior remains out of scope.
 
 Product positioning:
 
@@ -4723,9 +4723,9 @@ The `BlobStore` abstraction must ship in MVP. The optional S3 implementation doe
 
 ---
 
-# 56. Future Extensions
+# 56. Extensions
 
-## 56.1 Multiple aliases
+## 56.1 Multiple aliases — implemented
 
 Example:
 
@@ -4737,12 +4737,15 @@ billing@abc.com
 
 One Inbox with alias filters or separate inboxes.
 
-## 56.2 Multiple users
+## 56.2 Multiple users — partially implemented
 
-Add:
+Implemented:
 
 - memberships;
-- per-mailbox permissions;
+- per-mailbox permissions.
+
+Still future:
+
 - assignment;
 - internal notes.
 

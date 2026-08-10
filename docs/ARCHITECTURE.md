@@ -1,6 +1,6 @@
 # Architecture
 
-Litebox is a modular monolith optimized for one user, one primary mailbox, and one durable volume. This document describes the constraints contributors must preserve.
+Litebox is a modular monolith optimized for one self-hosted installation, multiple mailbox identities, and one durable volume. This document describes the constraints contributors must preserve.
 
 ## Architectural invariants
 
@@ -12,6 +12,8 @@ Litebox is a modular monolith optimized for one user, one primary mailbox, and o
 6. Inbound HTML is hostile until it passes the local sanitization pipeline.
 7. `/data` is private application state, never a static HTTP root.
 8. Infrastructure is added only for a measured requirement.
+9. Sessions authenticate users; mailbox memberships authorize content. A session never stores an authority-bearing mailbox list.
+10. Every interactive content query is scoped by an authorized `mailbox_id`; object identifiers alone never grant access.
 
 ## Runtime topology
 
@@ -56,6 +58,12 @@ SQLite runs in WAL mode with foreign keys, a five-second busy timeout, `synchron
 
 HTTP handlers contain no SQL. Application services contain no Resend SDK types. Mailbox services contain no direct filesystem calls.
 
+## Identity and mailbox authorization
+
+The durable relationship is `users -> mailbox_memberships -> mailboxes -> mailbox_addresses`. Users may hold different roles in different mailboxes, and each user may have multiple independent session rows. The active-mailbox cookie is only a preference: authentication resolves it against current memberships on every request and falls back to the user's first authorized mailbox.
+
+`owner` and `admin` may manage mailbox configuration and people, `member` may read and write mail, and `viewer` is read-only. Repository methods serving HTTP content require a mailbox ID and include it in reads and mutations. Attachment authorization joins through the owning message or draft. This prevents a valid identifier copied from one mailbox from crossing into another.
+
 ## Inbound state transition
 
 ```mermaid
@@ -80,7 +88,7 @@ sequenceDiagram
 Two keys prevent duplicate mail:
 
 - `webhook_events.svix_id` deduplicates one webhook delivery;
-- `messages.resend_email_id` and `jobs.dedupe_key=ingest:<email-id>` deduplicate provider-level replay under a different delivery ID.
+- `messages(mailbox_id, resend_email_id)` and `jobs.dedupe_key=ingest:<email-id>` deduplicate provider-level replay under a different delivery ID while allowing one provider message to be archived independently in multiple destination mailboxes.
 
 Blob keys derived from provider resources are deterministic. `FileStore.Put` treats an existing byte-identical object as success and a content mismatch as a collision. A crash after a blob commit but before a database commit therefore remains retry-safe.
 

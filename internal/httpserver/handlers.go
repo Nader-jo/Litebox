@@ -163,13 +163,28 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+func (s *Server) selectMailbox(w http.ResponseWriter, r *http.Request) {
+	requested := strings.TrimSpace(r.FormValue("mailbox_id"))
+	mailbox, err := s.repository.MailboxForUser(r.Context(), authFrom(r).Session.User.ID, requested)
+	if err != nil || mailbox.ID != requested {
+		s.renderError(w, r, http.StatusForbidden, "You do not have access to that mailbox.")
+		return
+	}
+	s.setMailboxCookie(w, mailbox.ID)
+	destination := r.FormValue("return_to")
+	if destination == "" || !strings.HasPrefix(destination, "/") || strings.HasPrefix(destination, "//") {
+		destination = "/inbox"
+	}
+	http.Redirect(w, r, destination, http.StatusSeeOther)
+}
+
 func (s *Server) folder(w http.ResponseWriter, r *http.Request, folder string) {
 	before, beforeID, err := parseThreadCursor(r.URL.Query().Get("cursor"))
 	if err != nil {
 		s.renderError(w, r, http.StatusBadRequest, "This mailbox page link is invalid.")
 		return
 	}
-	threads, hasMore, err := s.repository.ListThreadsPage(r.Context(), folder, 50, before, beforeID)
+	threads, hasMore, err := s.repository.ListThreadsPage(r.Context(), authFrom(r).Mailbox.ID, folder, 50, before, beforeID)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -181,13 +196,16 @@ func (s *Server) folder(w http.ResponseWriter, r *http.Request, folder string) {
 }
 
 func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
-	thread, err := s.repository.ThreadByID(r.Context(), r.PathValue("threadID"))
+	mailboxID := authFrom(r).Mailbox.ID
+	thread, err := s.repository.ThreadByID(r.Context(), mailboxID, r.PathValue("threadID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
 	}
-	_ = s.repository.MarkThreadRead(r.Context(), thread.ID, true)
-	thread, _ = s.repository.ThreadByID(r.Context(), thread.ID)
+	if authFrom(r).Mailbox.Role != "viewer" {
+		_ = s.repository.MarkThreadRead(r.Context(), mailboxID, thread.ID, true)
+		thread, _ = s.repository.ThreadByID(r.Context(), mailboxID, thread.ID)
+	}
 	folder := r.URL.Query().Get("folder")
 	if folder != "search" && !validFolder(folder) {
 		switch {
@@ -213,9 +231,9 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 			s.renderError(w, r, http.StatusBadRequest, "This search link is invalid.")
 			return
 		}
-		threads, hasMore, err = s.repository.SearchThreadsPage(r.Context(), parsed, 50, before, beforeID)
+		threads, hasMore, err = s.repository.SearchThreadsPage(r.Context(), mailboxID, parsed, 50, before, beforeID)
 	} else {
-		threads, hasMore, err = s.repository.ListThreadsPage(r.Context(), folder, 50, before, beforeID)
+		threads, hasMore, err = s.repository.ListThreadsPage(r.Context(), mailboxID, folder, 50, before, beforeID)
 	}
 	if err != nil {
 		s.internalError(w, r, err)
@@ -235,7 +253,7 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) threadAction(w http.ResponseWriter, r *http.Request, action string) {
-	if err := s.repository.ThreadAction(r.Context(), r.PathValue("threadID"), action); err != nil {
+	if err := s.repository.ThreadAction(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("threadID"), action); err != nil {
 		s.repositoryError(w, r, err)
 		return
 	}
@@ -247,7 +265,7 @@ func (s *Server) threadAction(w http.ResponseWriter, r *http.Request, action str
 }
 
 func (s *Server) threadRead(w http.ResponseWriter, r *http.Request, read bool) {
-	if err := s.repository.MarkThreadRead(r.Context(), r.PathValue("threadID"), read); err != nil {
+	if err := s.repository.MarkThreadRead(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("threadID"), read); err != nil {
 		s.repositoryError(w, r, err)
 		return
 	}
@@ -255,7 +273,7 @@ func (s *Server) threadRead(w http.ResponseWriter, r *http.Request, read bool) {
 }
 
 func (s *Server) threadDelete(w http.ResponseWriter, r *http.Request) {
-	if err := s.repository.DeleteThread(r.Context(), r.PathValue("threadID")); err != nil {
+	if err := s.repository.DeleteThread(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("threadID")); err != nil {
 		s.repositoryError(w, r, err)
 		return
 	}
@@ -263,6 +281,10 @@ func (s *Server) threadDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
+	if authFrom(r).Mailbox.Role == "viewer" {
+		s.renderError(w, r, http.StatusForbidden, "This mailbox membership is read-only.")
+		return
+	}
 	draft := model.Draft{}
 	data := s.pageData(r, "Compose")
 	data.CurrentFolder, data.Draft = "drafts", &draft
@@ -270,7 +292,12 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) reply(w http.ResponseWriter, r *http.Request, all bool) {
-	thread, err := s.repository.ThreadByID(r.Context(), r.PathValue("threadID"))
+	if authFrom(r).Mailbox.Role == "viewer" {
+		s.renderError(w, r, http.StatusForbidden, "This mailbox membership is read-only.")
+		return
+	}
+	mailboxID := authFrom(r).Mailbox.ID
+	thread, err := s.repository.ThreadByID(r.Context(), mailboxID, r.PathValue("threadID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -286,7 +313,12 @@ func (s *Server) reply(w http.ResponseWriter, r *http.Request, all bool) {
 	}
 	to := []model.Address{replyTarget}
 	if all {
-		to = mailx.ReplyAll(replyTarget, original.From, original.Recipients["to"], original.Recipients["cc"], s.config.AllowedRecipients)
+		localAddresses, addressErr := s.repository.MailboxAddressSet(r.Context(), mailboxID)
+		if addressErr != nil {
+			s.internalError(w, r, addressErr)
+			return
+		}
+		to = mailx.ReplyAll(replyTarget, original.From, original.Recipients["to"], original.Recipients["cc"], localAddresses)
 	}
 	draft := model.Draft{ThreadID: thread.ID, ReplyToMessageID: original.ID, To: to, Subject: mailx.ReplySubject(original.Subject)}
 	data := s.pageData(r, "Reply")
@@ -299,7 +331,8 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	created, err := s.repository.CreateDraft(r.Context(), s.mailboxID, draft)
+	mailboxID := authFrom(r).Mailbox.ID
+	created, err := s.repository.CreateDraft(r.Context(), mailboxID, draft)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -314,8 +347,14 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) {
 		if !s.allowSend(w, r) {
 			return
 		}
-		sender := s.sender(r)
-		_, threadID, err := s.repository.QueueDraft(r.Context(), created.ID, s.mailboxID, sender)
+		sender, senderErr := s.sender(r)
+		if senderErr != nil {
+			data := s.pageData(r, "Compose")
+			data.Draft, data.Error = &created, "Choose an available From address."
+			s.render(w, r, http.StatusUnprocessableEntity, ui.MailboxPage(data))
+			return
+		}
+		_, threadID, err := s.repository.QueueDraft(r.Context(), created.ID, mailboxID, sender)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
@@ -331,7 +370,7 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) drafts(w http.ResponseWriter, r *http.Request) {
-	drafts, err := s.repository.ListDrafts(r.Context(), 100)
+	drafts, err := s.repository.ListDrafts(r.Context(), authFrom(r).Mailbox.ID, 100)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -342,7 +381,7 @@ func (s *Server) drafts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) draft(w http.ResponseWriter, r *http.Request) {
-	draft, err := s.repository.DraftByID(r.Context(), r.PathValue("draftID"))
+	draft, err := s.repository.DraftByID(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("draftID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -358,7 +397,8 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.repository.SaveDraft(r.Context(), draft); err != nil {
+	mailboxID := authFrom(r).Mailbox.ID
+	if err := s.repository.SaveDraft(r.Context(), mailboxID, draft); err != nil {
 		s.repositoryError(w, r, err)
 		return
 	}
@@ -372,8 +412,14 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 		if !s.allowSend(w, r) {
 			return
 		}
-		sender := s.sender(r)
-		_, threadID, err := s.repository.QueueDraft(r.Context(), id, s.mailboxID, sender)
+		sender, senderErr := s.sender(r)
+		if senderErr != nil {
+			data := s.pageData(r, "Draft")
+			data.Draft, data.Error = &draft, "Choose an available From address."
+			s.render(w, r, http.StatusUnprocessableEntity, ui.MailboxPage(data))
+			return
+		}
+		_, threadID, err := s.repository.QueueDraft(r.Context(), id, mailboxID, sender)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
@@ -385,7 +431,8 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
-	draft, err := s.repository.DraftByID(r.Context(), r.PathValue("draftID"))
+	mailboxID := authFrom(r).Mailbox.ID
+	draft, err := s.repository.DraftByID(r.Context(), mailboxID, r.PathValue("draftID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -399,7 +446,12 @@ func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSend(w, r) {
 		return
 	}
-	_, threadID, err := s.repository.QueueDraft(r.Context(), draft.ID, s.mailboxID, s.sender(r))
+	sender, senderErr := s.sender(r)
+	if senderErr != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "Choose an available From address.")
+		return
+	}
+	_, threadID, err := s.repository.QueueDraft(r.Context(), draft.ID, mailboxID, sender)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -455,7 +507,7 @@ func (s *Server) renderDraftError(w http.ResponseWriter, r *http.Request, id, me
 
 func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 	draftID := r.PathValue("draftID")
-	draft, err := s.repository.DraftByID(r.Context(), draftID)
+	draft, err := s.repository.DraftByID(r.Context(), authFrom(r).Mailbox.ID, draftID)
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -498,7 +550,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
-	key, err := s.repository.DeleteDraftAttachment(r.Context(), r.PathValue("draftID"), r.PathValue("attachmentID"))
+	key, err := s.repository.DeleteDraftAttachment(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("draftID"), r.PathValue("attachmentID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -508,7 +560,7 @@ func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
-	keys, err := s.repository.DeleteDraft(r.Context(), r.PathValue("draftID"))
+	keys, err := s.repository.DeleteDraft(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("draftID"))
 	if err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -520,7 +572,7 @@ func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) attachment(w http.ResponseWriter, r *http.Request, inline bool) {
-	attachment, err := s.repository.AttachmentByID(r.Context(), r.PathValue("attachmentID"))
+	attachment, err := s.repository.AttachmentByID(r.Context(), authFrom(r).Mailbox.ID, r.PathValue("attachmentID"))
 	if err != nil || attachment.StorageStatus != "ready" {
 		s.renderError(w, r, http.StatusNotFound, "This attachment is not available.")
 		return
@@ -559,7 +611,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusBadRequest, "This search page link is invalid.")
 		return
 	}
-	threads, hasMore, err := s.repository.SearchThreadsPage(r.Context(), query, 50, before, beforeID)
+	threads, hasMore, err := s.repository.SearchThreadsPage(r.Context(), authFrom(r).Mailbox.ID, query, 50, before, beforeID)
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -631,40 +683,183 @@ func contextListURL(folder, rawSearch, cursor string) string {
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
-	stats, err := s.repository.SystemStats(r.Context(), s.config.DBPath)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
+	state := authFrom(r)
+	data := s.pageData(r, "Settings")
+	data.CurrentFolder = "admin"
+	switch r.URL.Path {
+	case "/settings", "/settings/mailboxes":
+		data.Title, data.SettingsSection = "Mailboxes", "mailboxes"
+	case "/settings/people":
+		if !data.CanManage {
+			s.renderError(w, r, http.StatusForbidden, "Mailbox administrator access is required.")
+			return
+		}
+		members, err := s.repository.ListMailboxMembers(r.Context(), state.Mailbox.ID)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		data.Title, data.SettingsSection, data.Members = "People", "people", members
+	case "/settings/sessions":
+		sessions, err := s.repository.ListSessions(r.Context(), state.Session.User.ID)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		data.Title, data.SettingsSection, data.Sessions, data.CurrentSession = "Sessions", "sessions", sessions, state.Session.ID
+	default:
+		if !data.CanOperateSystem {
+			s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system operations.")
+			return
+		}
+		stats, err := s.repository.SystemStats(r.Context(), s.config.DBPath)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		jobList, err := s.repository.ListJobs(r.Context(), 50)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		webhooks, err := s.repository.ListWebhooks(r.Context(), 50)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		health := "Healthy"
+		if err := s.store.Health(r.Context()); err != nil {
+			health = "Unavailable"
+		}
+		data.Title, data.SettingsSection = "System", "system"
+		data.Stats, data.Jobs, data.Webhooks, data.StorageHealth = stats, jobList, webhooks, health
 	}
-	jobList, err := s.repository.ListJobs(r.Context(), 50)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	webhooks, err := s.repository.ListWebhooks(r.Context(), 50)
-	if err != nil {
-		s.internalError(w, r, err)
-		return
-	}
-	health := "Healthy"
-	if err := s.store.Health(r.Context()); err != nil {
-		health = "Unavailable"
-	}
-	data := s.pageData(r, "System")
-	mailbox, _ := s.repository.PrimaryMailbox(r.Context())
-	data.CurrentFolder, data.Stats, data.Jobs, data.Webhooks, data.StorageHealth, data.MailboxName = "admin", stats, jobList, webhooks, health, mailbox.DisplayName
 	s.render(w, r, http.StatusOK, ui.MailboxPage(data))
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
-	if err := s.repository.UpdateMailboxDisplayName(r.Context(), r.FormValue("display_name")); err != nil {
+	if err := s.repository.UpdateMailboxDisplayName(r.Context(), authFrom(r).Mailbox.ID, r.FormValue("display_name")); err != nil {
 		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/admin/system", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+}
+
+func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	mailbox, err := s.repository.CreateMailbox(r.Context(), state.Session.User.ID, r.FormValue("address"), r.FormValue("display_name"))
+	if err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "The mailbox could not be created. Check that its address is valid and unused.")
+		return
+	}
+	s.setMailboxCookie(w, mailbox.ID)
+	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+}
+
+func (s *Server) addAlias(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if r.PathValue("mailboxID") != state.Mailbox.ID {
+		s.renderError(w, r, http.StatusForbidden, "The selected mailbox changed. Refresh and try again.")
+		return
+	}
+	if err := s.repository.AddMailboxAddress(r.Context(), state.Mailbox.ID, r.FormValue("address"), r.FormValue("display_name")); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "The alias must be a valid, unused email address.")
+		return
+	}
+	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+}
+
+func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if r.PathValue("mailboxID") != state.Mailbox.ID {
+		s.renderError(w, r, http.StatusForbidden, "The selected mailbox changed. Refresh and try again.")
+		return
+	}
+	if err := s.repository.DeleteMailboxAddress(r.Context(), state.Mailbox.ID, r.PathValue("addressID")); err != nil {
+		s.repositoryError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+}
+
+func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if r.PathValue("mailboxID") != state.Mailbox.ID {
+		s.renderError(w, r, http.StatusForbidden, "The selected mailbox changed. Refresh and try again.")
+		return
+	}
+	role := strings.TrimSpace(r.FormValue("role"))
+	if role == "owner" && state.Mailbox.Role != "owner" {
+		s.renderError(w, r, http.StatusForbidden, "Only an owner can grant ownership.")
+		return
+	}
+	password := r.FormValue("password")
+	if password == "" {
+		if err := s.repository.GrantMailboxAccess(r.Context(), state.Session.User.ID, state.Mailbox.ID, r.FormValue("email"), role); err != nil {
+			s.renderError(w, r, http.StatusUnprocessableEntity, "No existing enabled user has that email address.")
+			return
+		}
+	} else {
+		hash, err := auth.HashPassword(password)
+		if err != nil {
+			s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if _, err := s.repository.CreateUserWithMembership(r.Context(), state.Session.User.ID, state.Mailbox.ID,
+			r.FormValue("email"), r.FormValue("display_name"), hash, role); err != nil {
+			s.renderError(w, r, http.StatusUnprocessableEntity, "The administrator could not be created. The email may already be in use.")
+			return
+		}
+	}
+	http.Redirect(w, r, "/settings/people", http.StatusSeeOther)
+}
+
+func (s *Server) removeMember(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if r.PathValue("mailboxID") != state.Mailbox.ID {
+		s.renderError(w, r, http.StatusForbidden, "The selected mailbox changed. Refresh and try again.")
+		return
+	}
+	targetRole, err := s.repository.MailboxRoleForUser(r.Context(), state.Mailbox.ID, r.PathValue("userID"))
+	if err != nil {
+		s.repositoryError(w, r, err)
+		return
+	}
+	if targetRole == "owner" && state.Mailbox.Role != "owner" {
+		s.renderError(w, r, http.StatusForbidden, "Only an owner can revoke another owner.")
+		return
+	}
+	if err := s.repository.RemoveMailboxAccess(r.Context(), state.Session.User.ID, state.Mailbox.ID, r.PathValue("userID")); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if r.PathValue("userID") == state.Session.User.ID {
+		s.setMailboxCookie(w, "")
+		http.Redirect(w, r, "/inbox", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/settings/people", http.StatusSeeOther)
+}
+
+func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if err := s.repository.DeleteUserSession(r.Context(), state.Session.User.ID, r.PathValue("sessionID")); err != nil {
+		s.repositoryError(w, r, err)
+		return
+	}
+	if r.PathValue("sessionID") == state.Session.ID {
+		s.clearCookies(w)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/settings/sessions", http.StatusSeeOther)
 }
 
 func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
+	if !authFrom(r).Mailbox.IsPrimary {
+		s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system operations.")
+		return
+	}
 	if err := s.repository.RetryJob(r.Context(), r.PathValue("jobID")); err != nil {
 		s.repositoryError(w, r, err)
 		return
@@ -717,15 +912,16 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pageData(r *http.Request, title string) ui.PageData {
 	state := authFrom(r)
-	return ui.PageData{Title: title, PrimaryAddress: s.config.PrimaryAddress, User: state.Session.User, CSRFToken: state.CSRFToken}
+	mailboxes, _ := s.repository.ListMailboxesForUser(r.Context(), state.Session.User.ID)
+	canManage := state.Mailbox.Role == "owner" || state.Mailbox.Role == "admin"
+	return ui.PageData{Title: title, PrimaryAddress: state.Mailbox.Address, MailboxName: state.Mailbox.DisplayName,
+		Mailbox: state.Mailbox, Mailboxes: mailboxes, Addresses: state.Mailbox.Addresses,
+		User: state.Session.User, CSRFToken: state.CSRFToken, CanManage: canManage, CanWrite: state.Mailbox.Role != "viewer",
+		CanOperateSystem: canManage && state.Mailbox.IsPrimary}
 }
 
-func (s *Server) sender(r *http.Request) model.Address {
-	mailbox, err := s.repository.PrimaryMailbox(r.Context())
-	if err != nil {
-		return model.Address{Name: s.config.DisplayName, Address: s.config.PrimaryAddress}
-	}
-	return model.Address{Name: mailbox.DisplayName, Address: mailbox.Address}
+func (s *Server) sender(r *http.Request) (model.Address, error) {
+	return s.repository.SenderForMailbox(r.Context(), authFrom(r).Mailbox.ID, r.FormValue("from_address"))
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, component templ.Component) {

@@ -16,6 +16,25 @@ import (
 
 // CreateDraft persists a new editable message.
 func (r *Repository) CreateDraft(ctx context.Context, mailboxID string, draft model.Draft) (model.Draft, error) {
+	if draft.ThreadID != "" {
+		var exists int
+		if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE id = ? AND mailbox_id = ?", draft.ThreadID, mailboxID).Scan(&exists); err != nil {
+			return model.Draft{}, err
+		}
+		if exists == 0 {
+			return model.Draft{}, ErrNotFound
+		}
+	}
+	if draft.ReplyToMessageID != "" {
+		var exists int
+		if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE id = ? AND mailbox_id = ?
+			AND (? = '' OR thread_id = ?)`, draft.ReplyToMessageID, mailboxID, draft.ThreadID, draft.ThreadID).Scan(&exists); err != nil {
+			return model.Draft{}, err
+		}
+		if exists == 0 {
+			return model.Draft{}, ErrNotFound
+		}
+	}
 	now := time.Now().UTC()
 	if draft.ID == "" {
 		draft.ID = ids.New()
@@ -33,7 +52,7 @@ func (r *Repository) CreateDraft(ctx context.Context, mailboxID string, draft mo
 }
 
 // SaveDraft validates and stores editable fields.
-func (r *Repository) SaveDraft(ctx context.Context, draft model.Draft) error {
+func (r *Repository) SaveDraft(ctx context.Context, mailboxID string, draft model.Draft) error {
 	toJSON, err := json.Marshal(draft.To)
 	if err != nil {
 		return err
@@ -41,8 +60,8 @@ func (r *Repository) SaveDraft(ctx context.Context, draft model.Draft) error {
 	ccJSON, _ := json.Marshal(draft.Cc)
 	bccJSON, _ := json.Marshal(draft.Bcc)
 	result, err := r.db.ExecContext(ctx, `UPDATE drafts SET to_json = ?, cc_json = ?, bcc_json = ?,
-        subject = ?, text_body = ?, updated_at = ? WHERE id = ?`, string(toJSON), string(ccJSON), string(bccJSON),
-		draft.Subject, draft.TextBody, millis(time.Now()), draft.ID)
+		subject = ?, text_body = ?, updated_at = ? WHERE id = ? AND mailbox_id = ?`, string(toJSON), string(ccJSON), string(bccJSON),
+		draft.Subject, draft.TextBody, millis(time.Now()), draft.ID, mailboxID)
 	if err != nil {
 		return err
 	}
@@ -54,13 +73,13 @@ func (r *Repository) SaveDraft(ctx context.Context, draft model.Draft) error {
 }
 
 // DraftByID loads one draft and its attachments.
-func (r *Repository) DraftByID(ctx context.Context, id string) (model.Draft, error) {
+func (r *Repository) DraftByID(ctx context.Context, mailboxID, id string) (model.Draft, error) {
 	var draft model.Draft
 	var threadID, replyID sql.NullString
 	var toJSON, ccJSON, bccJSON string
 	var createdAt, updatedAt int64
 	err := r.db.QueryRowContext(ctx, `SELECT id, thread_id, reply_to_message_id, to_json, cc_json, bcc_json,
-        subject, text_body, created_at, updated_at FROM drafts WHERE id = ?`, id).Scan(&draft.ID, &threadID,
+		subject, text_body, created_at, updated_at FROM drafts WHERE id = ? AND mailbox_id = ?`, id, mailboxID).Scan(&draft.ID, &threadID,
 		&replyID, &toJSON, &ccJSON, &bccJSON, &draft.Subject, &draft.TextBody, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Draft{}, ErrNotFound
@@ -80,9 +99,9 @@ func (r *Repository) DraftByID(ctx context.Context, id string) (model.Draft, err
 }
 
 // ListDrafts returns recent drafts without loading attachment bytes.
-func (r *Repository) ListDrafts(ctx context.Context, limit int) ([]model.Draft, error) {
+func (r *Repository) ListDrafts(ctx context.Context, mailboxID string, limit int) ([]model.Draft, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, thread_id, reply_to_message_id, to_json, cc_json, bcc_json,
-        subject, text_body, created_at, updated_at FROM drafts ORDER BY updated_at DESC LIMIT ?`, limit)
+		subject, text_body, created_at, updated_at FROM drafts WHERE mailbox_id = ? ORDER BY updated_at DESC LIMIT ?`, mailboxID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -108,12 +127,19 @@ func (r *Repository) ListDrafts(ctx context.Context, limit int) ([]model.Draft, 
 }
 
 // DeleteDraft deletes a draft and returns storage keys that must be removed.
-func (r *Repository) DeleteDraft(ctx context.Context, id string) ([]string, error) {
+func (r *Repository) DeleteDraft(ctx context.Context, mailboxID, id string) ([]string, error) {
+	var exists int
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM drafts WHERE id = ? AND mailbox_id = ?", id, mailboxID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists == 0 {
+		return nil, ErrNotFound
+	}
 	attachments, err := r.listAttachments(ctx, "draft_id", id)
 	if err != nil {
 		return nil, err
 	}
-	result, err := r.db.ExecContext(ctx, "DELETE FROM drafts WHERE id = ?", id)
+	result, err := r.db.ExecContext(ctx, "DELETE FROM drafts WHERE id = ? AND mailbox_id = ?", id, mailboxID)
 	if err != nil {
 		return nil, err
 	}
@@ -140,13 +166,16 @@ func (r *Repository) AddDraftAttachment(ctx context.Context, attachment model.At
 }
 
 // AttachmentByID loads private blob metadata for an authenticated route.
-func (r *Repository) AttachmentByID(ctx context.Context, id string) (model.Attachment, error) {
+func (r *Repository) AttachmentByID(ctx context.Context, mailboxID, id string) (model.Attachment, error) {
 	var attachment model.Attachment
 	var messageID, draftID, providerID, contentID sql.NullString
 	var createdAt int64
 	err := r.db.QueryRowContext(ctx, `SELECT id, message_id, draft_id, provider_attachment_id, filename,
         safe_filename, content_type, content_disposition, content_id, storage_backend, storage_key,
-        size_bytes, sha256, storage_status, created_at FROM attachments WHERE id = ?`, id).Scan(&attachment.ID,
+		size_bytes, sha256, storage_status, created_at FROM attachments a WHERE id = ? AND (
+			EXISTS (SELECT 1 FROM messages m WHERE m.id = a.message_id AND m.mailbox_id = ?) OR
+			EXISTS (SELECT 1 FROM drafts d WHERE d.id = a.draft_id AND d.mailbox_id = ?)
+		)`, id, mailboxID, mailboxID).Scan(&attachment.ID,
 		&messageID, &draftID, &providerID, &attachment.Filename, &attachment.SafeFilename, &attachment.ContentType,
 		&attachment.ContentDisposition, &contentID, &attachment.StorageBackend, &attachment.StorageKey,
 		&attachment.SizeBytes, &attachment.SHA256, &attachment.StorageStatus, &createdAt)
@@ -159,9 +188,10 @@ func (r *Repository) AttachmentByID(ctx context.Context, id string) (model.Attac
 }
 
 // DeleteDraftAttachment deletes metadata and returns the blob key.
-func (r *Repository) DeleteDraftAttachment(ctx context.Context, draftID, attachmentID string) (string, error) {
+func (r *Repository) DeleteDraftAttachment(ctx context.Context, mailboxID, draftID, attachmentID string) (string, error) {
 	var key string
-	if err := r.db.QueryRowContext(ctx, "SELECT storage_key FROM attachments WHERE id = ? AND draft_id = ?", attachmentID, draftID).Scan(&key); err != nil {
+	if err := r.db.QueryRowContext(ctx, `SELECT a.storage_key FROM attachments a JOIN drafts d ON d.id = a.draft_id
+		WHERE a.id = ? AND a.draft_id = ? AND d.mailbox_id = ?`, attachmentID, draftID, mailboxID).Scan(&key); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
 		}
@@ -173,7 +203,11 @@ func (r *Repository) DeleteDraftAttachment(ctx context.Context, draftID, attachm
 
 // QueueDraft turns a draft into a locally durable outbound message and job.
 func (r *Repository) QueueDraft(ctx context.Context, draftID, mailboxID string, from model.Address) (messageID, threadID string, err error) {
-	draft, err := r.DraftByID(ctx, draftID)
+	from, err = r.SenderForMailbox(ctx, mailboxID, from.Address)
+	if err != nil {
+		return "", "", err
+	}
+	draft, err := r.DraftByID(ctx, mailboxID, draftID)
 	if err != nil {
 		return "", "", err
 	}
@@ -196,11 +230,19 @@ func (r *Repository) QueueDraft(ctx context.Context, draftID, mailboxID string, 
 			if err != nil {
 				return err
 			}
+		} else {
+			var exists int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE id = ? AND mailbox_id = ?", threadID, mailboxID).Scan(&exists); err != nil {
+				return err
+			}
+			if exists == 0 {
+				return ErrNotFound
+			}
 		}
 		var inReplyTo, references string
 		if draft.ReplyToMessageID != "" {
 			_ = tx.QueryRowContext(ctx, `SELECT COALESCE(rfc_message_id, ''), COALESCE(references_header, '')
-                FROM messages WHERE id = ?`, draft.ReplyToMessageID).Scan(&inReplyTo, &references)
+				FROM messages WHERE id = ? AND mailbox_id = ?`, draft.ReplyToMessageID, mailboxID).Scan(&inReplyTo, &references)
 			references = mailx.References(references, inReplyTo)
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO messages
@@ -226,8 +268,8 @@ func (r *Repository) QueueDraft(ctx context.Context, draftID, mailboxID string, 
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE threads SET subject_norm = ?, subject_display = ?, latest_message_at = ?,
-            message_count = message_count + 1, updated_at = ? WHERE id = ?`, mailx.NormalizeSubject(draft.Subject),
-			draft.Subject, millis(now), millis(now), threadID); err != nil {
+			message_count = message_count + 1, updated_at = ? WHERE id = ? AND mailbox_id = ?`, mailx.NormalizeSubject(draft.Subject),
+			draft.Subject, millis(now), millis(now), threadID, mailboxID); err != nil {
 			return err
 		}
 		recipientText := mailx.FormatAddresses(append(append(draft.To, draft.Cc...), draft.Bcc...))
@@ -239,7 +281,7 @@ func (r *Repository) QueueDraft(ctx context.Context, draftID, mailboxID string, 
 		if _, _, err := enqueueJob(ctx, tx, "send_outbound", "send:"+messageID, string(payload), 50, 10, now); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "DELETE FROM drafts WHERE id = ?", draftID)
+		_, err = tx.ExecContext(ctx, "DELETE FROM drafts WHERE id = ? AND mailbox_id = ?", draftID, mailboxID)
 		return err
 	})
 	return messageID, threadID, err

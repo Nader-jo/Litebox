@@ -78,7 +78,7 @@ func TestInboundArchivalAndOutboundIdempotency(t *testing.T) {
 		RawURL: "memory://raw", Headers: map[string]string{"from": "Alice <alice@example.com>"},
 		Attachments: []provider.ReceivedAttachment{{ID: "attachment-1", Filename: "note.txt", ContentType: "text/plain"}}},
 		download: map[string][]byte{"memory://raw": []byte("raw eml"), "memory://attachment-1": []byte("attachment")}}
-	service := NewMailbox(cfg, repo, store, fake, mailboxID)
+	service := NewMailbox(cfg, repo, store, fake)
 	eventID := ids.New()
 	event := model.WebhookEvent{ID: eventID, SvixID: "svix-1", EventType: "email.received", ResendEmailID: "received-1", RawPayload: `{}`, ReceivedAt: time.Now()}
 	_, err = repo.PersistWebhook(ctx, event, time.Now(), "ingest_inbound", "ingest:received-1", map[string]string{"webhook_event_id": eventID, "resend_email_id": "received-1"})
@@ -88,11 +88,11 @@ func TestInboundArchivalAndOutboundIdempotency(t *testing.T) {
 	if err := service.Ingest(ctx, eventID, "received-1", false); err != nil {
 		t.Fatal(err)
 	}
-	threads, err := repo.ListThreads(ctx, "inbox", 10)
+	threads, err := repo.ListThreads(ctx, mailboxID, "inbox", 10)
 	if err != nil || len(threads) != 1 || !threads[0].HasAttachments {
 		t.Fatal(threads, err)
 	}
-	thread, err := repo.ThreadByID(ctx, threads[0].ID)
+	thread, err := repo.ThreadByID(ctx, mailboxID, threads[0].ID)
 	if err != nil || len(thread.Messages) != 1 || !thread.Messages[0].RemoteImagesBlocked || len(thread.Messages[0].Attachments) != 1 {
 		t.Fatal(thread, err)
 	}
@@ -119,6 +119,34 @@ func TestInboundArchivalAndOutboundIdempotency(t *testing.T) {
 	stats, err := repo.SystemStats(ctx, cfg.DBPath)
 	if err != nil || stats.MissingRawMessages != 1 {
 		t.Fatalf("missing raw diagnostic=%d err=%v", stats.MissingRawMessages, err)
+	}
+
+	owner, err := repo.CreateFirstUser(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := repo.CreateMailbox(ctx, owner.ID, "billing@example.com", "Billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.received = provider.ReceivedEmail{ID: "received-for-two-mailboxes",
+		To: []string{"hello@example.com", "billing@example.com"}, From: "shared@example.net", CreatedAt: time.Now().Add(2 * time.Minute),
+		Subject: "Shared delivery", Text: "Visible in both independent inboxes", MessageID: "<shared-delivery@example.net>",
+		RawURL: "memory://shared-raw", Headers: map[string]string{"from": "Shared <shared@example.net>"}}
+	fake.download["memory://shared-raw"] = []byte("shared raw email")
+	sharedEventID := ids.New()
+	sharedEvent := model.WebhookEvent{ID: sharedEventID, SvixID: "svix-shared", EventType: "email.received",
+		ResendEmailID: fake.received.ID, RawPayload: `{}`, ReceivedAt: time.Now()}
+	if _, err := repo.PersistWebhook(ctx, sharedEvent, time.Now(), "ingest_inbound", "ingest:"+fake.received.ID,
+		map[string]string{"webhook_event_id": sharedEventID, "resend_email_id": fake.received.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Ingest(ctx, sharedEventID, fake.received.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	secondaryThreads, err := repo.ListThreads(ctx, secondary.ID, "inbox", 10)
+	if err != nil || len(secondaryThreads) != 1 || secondaryThreads[0].Subject != "Shared delivery" {
+		t.Fatalf("secondary delivery=%#v err=%v", secondaryThreads, err)
 	}
 
 	draft, err := repo.CreateDraft(ctx, mailboxID, model.Draft{To: []model.Address{{Address: "alice@example.com"}}, Subject: "Outbound", TextBody: "Hello"})

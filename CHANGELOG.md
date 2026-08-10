@@ -4,6 +4,19 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Independent mailboxes with isolated threads, drafts, folders, search, and unread state.
+- Multiple aliases per mailbox with inbound recipient routing and selectable outbound identities.
+- Multiple administrators with owner, admin, member, and viewer roles scoped per mailbox.
+- Mailbox switching and an active-session page with individual device revocation.
+
+### Security
+
+- Scope interactive message, thread, draft, attachment, and search operations to an authorized mailbox membership.
+- Treat the active-mailbox cookie as an untrusted preference and re-authorize it on every request.
+- Preserve provider idempotency while isolating messages delivered to more than one local mailbox.
+
 ## [0.1.0] - 2026-08-10
 
 ### Added

@@ -48,14 +48,19 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, err
 	if err != nil {
 		return fail(fmt.Errorf("ensure primary mailbox: %w", err))
 	}
+	for address := range cfg.AllowedRecipients {
+		if err := repo.EnsureMailboxAddress(ctx, mailboxID, address, cfg.DisplayName); err != nil {
+			return fail(fmt.Errorf("ensure configured mailbox address %q: %w", address, err))
+		}
+	}
 	store, err := blobstore.NewFileStore(cfg.StorageRoot, cfg.StorageTempRoot)
 	if err != nil {
 		return fail(err)
 	}
 	providerClient := provider.NewResend(cfg.ResendAPIKey, cfg.ResendWebhookSecret)
-	mailbox := service.NewMailbox(cfg, repo, store, providerClient, mailboxID)
+	mailbox := service.NewMailbox(cfg, repo, store, providerClient)
 	runner := jobs.New(repo, mailbox.JobHandlers(), cfg.WorkerCount, cfg.JobPollInterval, cfg.JobLease, logger)
-	server, err := httpserver.New(cfg, repo, store, providerClient, mailbox, mailboxID, logger)
+	server, err := httpserver.New(cfg, repo, store, providerClient, mailbox, logger)
 	if err != nil {
 		return fail(err)
 	}

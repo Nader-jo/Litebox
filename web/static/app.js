@@ -25,9 +25,9 @@
   });
 
   document.addEventListener("change", (event) => {
-    if (event.target.matches("[data-auto-submit]") && event.target.files?.length) {
-      event.target.form?.requestSubmit();
-    }
+	if (!event.target.matches("[data-auto-submit]")) return;
+	if (event.target.type === "file" && !event.target.files?.length) return;
+	event.target.form?.requestSubmit();
   });
 
   document.addEventListener("htmx:configRequest", (event) => {

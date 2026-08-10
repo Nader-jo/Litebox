@@ -27,6 +27,9 @@ func (r *Repository) EnsureMailbox(ctx context.Context, address, displayName str
 	var existing string
 	err = r.db.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE address = ?", normalized).Scan(&existing)
 	if err == nil {
+		if err := r.ensurePrimaryAddress(ctx, existing, normalized, local, domain, displayName); err != nil {
+			return "", err
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -34,10 +37,29 @@ func (r *Repository) EnsureMailbox(ctx context.Context, address, displayName str
 	}
 	now := time.Now().UTC()
 	id := ids.New()
-	_, err = r.db.ExecContext(ctx, `INSERT INTO mailboxes
-        (id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, id, normalized, local, domain, displayName, millis(now), millis(now))
+	err = r.Transaction(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mailboxes
+			(id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, 1, ?, ?)`, id, normalized, local, domain, displayName, millis(now), millis(now)); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_addresses
+			(id, mailbox_id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`, ids.New(), id, normalized, local, domain, displayName, millis(now), millis(now))
+		return err
+	})
 	return id, err
+}
+
+func (r *Repository) ensurePrimaryAddress(ctx context.Context, mailboxID, address, local, domain, displayName string) error {
+	now := millis(time.Now())
+	_, err := r.db.ExecContext(ctx, `INSERT INTO mailbox_addresses
+		(id, mailbox_id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+		ON CONFLICT(address) DO UPDATE SET mailbox_id = excluded.mailbox_id, is_primary = 1,
+			display_name = excluded.display_name, updated_at = excluded.updated_at`,
+		ids.New(), mailboxID, address, local, domain, displayName, now, now)
+	return err
 }
 
 // PrimaryMailboxID returns the configured primary mailbox database ID.
@@ -63,14 +85,26 @@ func (r *Repository) PrimaryMailbox(ctx context.Context) (model.Mailbox, error) 
 	return mailbox, err
 }
 
-// UpdateMailboxDisplayName changes only the human-facing sender name.
-func (r *Repository) UpdateMailboxDisplayName(ctx context.Context, displayName string) error {
+// UpdateMailboxDisplayName changes the human-facing name of one mailbox and its
+// primary sender identity.
+func (r *Repository) UpdateMailboxDisplayName(ctx context.Context, mailboxID, displayName string) error {
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" || len(displayName) > 128 {
 		return fmt.Errorf("display name must be between 1 and 128 characters")
 	}
-	_, err := r.db.ExecContext(ctx, "UPDATE mailboxes SET display_name = ?, updated_at = ? WHERE is_primary = 1", displayName, millis(time.Now()))
-	return err
+	now := millis(time.Now())
+	return r.Transaction(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, "UPDATE mailboxes SET display_name = ?, updated_at = ? WHERE id = ?", displayName, now, mailboxID)
+		if err != nil {
+			return err
+		}
+		if count, _ := result.RowsAffected(); count == 0 {
+			return ErrNotFound
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE mailbox_addresses SET display_name = ?, updated_at = ?
+			WHERE mailbox_id = ? AND is_primary = 1`, displayName, now, mailboxID)
+		return err
+	})
 }
 
 // HasUsers reports whether first-run setup has completed.
@@ -80,7 +114,8 @@ func (r *Repository) HasUsers(ctx context.Context) (bool, error) {
 	return count > 0, err
 }
 
-// CreateFirstUser atomically creates the only MVP administrator.
+// CreateFirstUser atomically creates the installation owner and grants access to
+// the bootstrapped primary mailbox.
 func (r *Repository) CreateFirstUser(ctx context.Context, email, displayName, passwordHash string) (model.User, error) {
 	now := time.Now().UTC()
 	user := model.User{ID: ids.New(), Email: strings.ToLower(strings.TrimSpace(email)), DisplayName: strings.TrimSpace(displayName), PasswordHash: passwordHash, CreatedAt: now}
@@ -92,9 +127,18 @@ func (r *Repository) CreateFirstUser(ctx context.Context, email, displayName, pa
 		if count != 0 {
 			return fmt.Errorf("setup is already complete")
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO users
-            (id, email, display_name, password_hash, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)`, user.ID, user.Email, user.DisplayName, user.PasswordHash, millis(now), millis(now))
+		if _, err := tx.ExecContext(ctx, `INSERT INTO users
+			(id, email, display_name, password_hash, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`, user.ID, user.Email, user.DisplayName, user.PasswordHash, millis(now), millis(now)); err != nil {
+			return err
+		}
+		var mailboxID string
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1").Scan(&mailboxID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_memberships
+			(user_id, mailbox_id, role, created_by, created_at, updated_at)
+			VALUES (?, ?, 'owner', ?, ?, ?)`, user.ID, mailboxID, user.ID, millis(now), millis(now))
 		return err
 	})
 	return user, err
@@ -148,13 +192,15 @@ func (r *Repository) CreateSession(ctx context.Context, userID string, tokenHash
 // FindSession authenticates a non-expired session from its hashed cookie.
 func (r *Repository) FindSession(ctx context.Context, tokenHash []byte) (model.Session, error) {
 	var session model.Session
-	var sessionCreatedAt, userCreatedAt, expiresAt int64
+	var sessionCreatedAt, userCreatedAt, expiresAt, lastSeenAt int64
 	var lastLogin sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT s.id, s.csrf_token_hash, s.created_at, s.expires_at,
-        u.id, u.email, u.display_name, u.password_hash, u.created_at, u.last_login_at
-        FROM sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL`, tokenHash, millis(time.Now())).
-		Scan(&session.ID, &session.CSRFHash, &sessionCreatedAt, &expiresAt, &session.User.ID, &session.User.Email,
+	err := r.db.QueryRowContext(ctx, `SELECT s.id, s.csrf_token_hash, s.created_at, s.expires_at, s.last_seen_at,
+		COALESCE(s.user_agent, ''),
+		u.id, u.email, u.display_name, u.password_hash, u.created_at, u.last_login_at
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL`, tokenHash, millis(time.Now())).
+		Scan(&session.ID, &session.CSRFHash, &sessionCreatedAt, &expiresAt, &lastSeenAt, &session.UserAgent,
+			&session.User.ID, &session.User.Email,
 			&session.User.DisplayName, &session.User.PasswordHash, &userCreatedAt, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Session{}, ErrNotFound
@@ -164,6 +210,7 @@ func (r *Repository) FindSession(ctx context.Context, tokenHash []byte) (model.S
 	}
 	session.CreatedAt = fromMillis(sessionCreatedAt)
 	session.ExpiresAt = fromMillis(expiresAt)
+	session.LastSeenAt = fromMillis(lastSeenAt)
 	session.User.CreatedAt = fromMillis(userCreatedAt)
 	session.User.LastLoginAt = nullableTime(lastLogin)
 	return session, nil

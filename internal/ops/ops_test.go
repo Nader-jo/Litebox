@@ -73,7 +73,7 @@ func TestBackupRestoreAndDoctor(t *testing.T) {
 	if err := Doctor(ctx, restoreCfg, restoredRepo, restoredStore, true); err != nil {
 		t.Fatal(err)
 	}
-	threads, err := restoredRepo.ListThreads(ctx, "inbox", 10)
+	threads, err := restoredRepo.ListThreads(ctx, mailboxID, "inbox", 10)
 	if err != nil || len(threads) != 1 || threads[0].Subject != "Back me up" {
 		t.Fatal(threads, err)
 	}

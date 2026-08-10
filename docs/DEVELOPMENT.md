@@ -41,6 +41,7 @@ Generated files are committed. CI regenerates them and rejects drift. Browser as
 
 - Environment reads belong in `internal/config`.
 - SQL belongs in `internal/repository`; use placeholders for every value.
+- Interactive content repositories must require `mailbox_id`; an object ID alone is never an authorization boundary.
 - Provider SDK types stay in `internal/provider`.
 - Mailbox workflows depend on `blobstore.Store`, not `os` or `filepath`.
 - HTTP handlers perform boundary validation and call repository/service methods.
@@ -71,6 +72,7 @@ The required high-risk suites cover:
 - webhook/job dedupe and lease recovery;
 - inbound archival and outbound idempotency;
 - first-run/login/CSRF;
+- multi-mailbox routing, membership roles, session revocation, and cross-mailbox isolation;
 - backup, restore, and deep doctor.
 
 Provider tests use an `httptest` server through `provider.NewResendForTest`. Do not make live Resend sends part of the default suite. If a future live suite is added, gate it behind `LIVE_RESEND_TESTS=1` and use a dedicated test domain/account.

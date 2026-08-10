@@ -5,7 +5,7 @@
 
 ## Context
 
-Litebox serves one user and one custom-domain mailbox. The difficult requirements are correctness and recovery around email transport, not horizontal scale.
+Litebox serves one trusted installation with custom-domain mailboxes and users. The difficult requirements are correctness and recovery around email transport, not horizontal scale.
 
 ## Decision
 

@@ -37,14 +37,14 @@ type InboundMessage struct {
 }
 
 // ListThreads returns a bounded folder projection ordered by latest activity.
-func (r *Repository) ListThreads(ctx context.Context, folder string, limit int) ([]model.ThreadSummary, error) {
-	threads, _, err := r.ListThreadsPage(ctx, folder, limit, time.Time{}, "")
+func (r *Repository) ListThreads(ctx context.Context, mailboxID, folder string, limit int) ([]model.ThreadSummary, error) {
+	threads, _, err := r.ListThreadsPage(ctx, mailboxID, folder, limit, time.Time{}, "")
 	return threads, err
 }
 
 // ListThreadsPage returns one keyset-paginated folder page. The cursor is the
 // final (latest_message_at, id) tuple from the preceding page.
-func (r *Repository) ListThreadsPage(ctx context.Context, folder string, limit int, before time.Time, beforeID string) ([]model.ThreadSummary, bool, error) {
+func (r *Repository) ListThreadsPage(ctx context.Context, mailboxID, folder string, limit int, before time.Time, beforeID string) ([]model.ThreadSummary, bool, error) {
 	condition := "t.is_trashed = 0 AND t.is_archived = 0"
 	switch folder {
 	case "inbox", "":
@@ -64,7 +64,7 @@ func (r *Repository) ListThreadsPage(ctx context.Context, folder string, limit i
 		condition += " AND (t.latest_message_at < ? OR (t.latest_message_at = ? AND t.id < ?))"
 		args = append(args, millis(before), millis(before), beforeID)
 	}
-	threads, err := r.queryThreadSummaries(ctx, condition, args, limit+1)
+	threads, err := r.queryThreadSummaries(ctx, mailboxID, condition, args, limit+1)
 	if err != nil {
 		return nil, false, err
 	}
@@ -75,7 +75,7 @@ func (r *Repository) ListThreadsPage(ctx context.Context, folder string, limit i
 	return threads, hasMore, nil
 }
 
-func (r *Repository) queryThreadSummaries(ctx context.Context, condition string, args []any, limit int) ([]model.ThreadSummary, error) {
+func (r *Repository) queryThreadSummaries(ctx context.Context, mailboxID, condition string, args []any, limit int) ([]model.ThreadSummary, error) {
 	query := `WITH latest AS (
         SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at) DESC, m.id DESC) AS rank
         FROM messages m
@@ -88,7 +88,8 @@ func (r *Repository) queryThreadSummaries(ctx context.Context, condition string,
         SUBSTR(REPLACE(REPLACE(l.text_body, CHAR(10), ' '), CHAR(13), ' '), 1, 180),
         EXISTS(SELECT 1 FROM attachments a WHERE a.message_id = l.id)
     FROM threads t JOIN latest l ON l.thread_id = t.id AND l.rank = 1
-    WHERE ` + condition + ` ORDER BY t.latest_message_at DESC, t.id DESC LIMIT ?`
+	WHERE t.mailbox_id = ? AND (` + condition + `) ORDER BY t.latest_message_at DESC, t.id DESC LIMIT ?`
+	args = append([]any{mailboxID}, args...)
 	args = append(args, limit)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -114,15 +115,15 @@ func (r *Repository) queryThreadSummaries(ctx context.Context, condition string,
 }
 
 // SearchThreads runs FTS and structured filters with parameterized values.
-func (r *Repository) SearchThreads(ctx context.Context, query search.Query, limit int) ([]model.ThreadSummary, error) {
-	threads, _, err := r.SearchThreadsPage(ctx, query, limit, time.Time{}, "")
+func (r *Repository) SearchThreads(ctx context.Context, mailboxID string, query search.Query, limit int) ([]model.ThreadSummary, error) {
+	threads, _, err := r.SearchThreadsPage(ctx, mailboxID, query, limit, time.Time{}, "")
 	return threads, err
 }
 
 // SearchThreadsPage runs FTS and structured filters with keyset pagination.
-func (r *Repository) SearchThreadsPage(ctx context.Context, query search.Query, limit int, before time.Time, beforeID string) ([]model.ThreadSummary, bool, error) {
-	conditions := []string{"t.is_trashed = 0"}
-	var args []any
+func (r *Repository) SearchThreadsPage(ctx context.Context, mailboxID string, query search.Query, limit int, before time.Time, beforeID string) ([]model.ThreadSummary, bool, error) {
+	conditions := []string{"t.mailbox_id = ?", "t.is_trashed = 0"}
+	args := []any{mailboxID}
 	joinSearch := false
 	if fts := query.FTS(); fts != "" {
 		joinSearch = true
@@ -196,15 +197,15 @@ func (r *Repository) SearchThreadsPage(ctx context.Context, query search.Query, 
 	for index, id := range identifiers {
 		identifierArgs[index] = id
 	}
-	threads, err := r.queryThreadSummaries(ctx, "t.id IN ("+placeholders+")", identifierArgs, limit)
+	threads, err := r.queryThreadSummaries(ctx, mailboxID, "t.id IN ("+placeholders+")", identifierArgs, limit)
 	return threads, hasMore, err
 }
 
 // ThreadByID loads a conversation and all of its normalized metadata.
-func (r *Repository) ThreadByID(ctx context.Context, id string) (model.Thread, error) {
+func (r *Repository) ThreadByID(ctx context.Context, mailboxID, id string) (model.Thread, error) {
 	var thread model.Thread
 	var archived, starred, trashed int
-	err := r.db.QueryRowContext(ctx, `SELECT id, subject_display, is_archived, is_starred, is_trashed FROM threads WHERE id = ?`, id).
+	err := r.db.QueryRowContext(ctx, `SELECT id, subject_display, is_archived, is_starred, is_trashed FROM threads WHERE id = ? AND mailbox_id = ?`, id, mailboxID).
 		Scan(&thread.ID, &thread.Subject, &archived, &starred, &trashed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Thread{}, ErrNotFound
@@ -251,24 +252,31 @@ func (r *Repository) ThreadByID(ctx context.Context, id string) (model.Thread, e
 }
 
 // MarkThreadRead changes all inbound messages and refreshes the denormalized count.
-func (r *Repository) MarkThreadRead(ctx context.Context, id string, read bool) error {
+func (r *Repository) MarkThreadRead(ctx context.Context, mailboxID, id string, read bool) error {
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "UPDATE messages SET is_read = ?, updated_at = ? WHERE thread_id = ? AND direction = 'inbound'", boolInt(read), millis(time.Now()), id); err != nil {
+		var exists int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE id = ? AND mailbox_id = ?", id, mailboxID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			return ErrNotFound
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE messages SET is_read = ?, updated_at = ? WHERE thread_id = ? AND mailbox_id = ? AND direction = 'inbound'", boolInt(read), millis(time.Now()), id, mailboxID); err != nil {
 			return err
 		}
 		unread := 0
 		if !read {
-			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE thread_id = ? AND direction = 'inbound'", id).Scan(&unread); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE thread_id = ? AND mailbox_id = ? AND direction = 'inbound'", id, mailboxID).Scan(&unread); err != nil {
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE threads SET unread_count = ?, updated_at = ? WHERE id = ?", unread, millis(time.Now()), id)
+		_, err := tx.ExecContext(ctx, "UPDATE threads SET unread_count = ?, updated_at = ? WHERE id = ? AND mailbox_id = ?", unread, millis(time.Now()), id, mailboxID)
 		return err
 	})
 }
 
 // ThreadAction applies one explicit mailbox state transition.
-func (r *Repository) ThreadAction(ctx context.Context, id, action string) error {
+func (r *Repository) ThreadAction(ctx context.Context, mailboxID, id, action string) error {
 	statement := ""
 	switch action {
 	case "archive":
@@ -286,7 +294,7 @@ func (r *Repository) ThreadAction(ctx context.Context, id, action string) error 
 	default:
 		return fmt.Errorf("unknown thread action")
 	}
-	result, err := r.db.ExecContext(ctx, "UPDATE threads SET "+statement+", updated_at = ? WHERE id = ?", millis(time.Now()), id)
+	result, err := r.db.ExecContext(ctx, "UPDATE threads SET "+statement+", updated_at = ? WHERE id = ? AND mailbox_id = ?", millis(time.Now()), id, mailboxID)
 	if err != nil {
 		return err
 	}
@@ -298,10 +306,10 @@ func (r *Repository) ThreadAction(ctx context.Context, id, action string) error 
 }
 
 // DeleteThread permanently removes local rows and schedules idempotent blob deletion.
-func (r *Repository) DeleteThread(ctx context.Context, id string) error {
+func (r *Repository) DeleteThread(ctx context.Context, mailboxID, id string) error {
 	var keys []string
-	rows, err := r.db.QueryContext(ctx, `SELECT storage_key FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE thread_id = ?)
-        UNION ALL SELECT raw_storage_key FROM messages WHERE thread_id = ? AND raw_storage_key IS NOT NULL`, id, id)
+	rows, err := r.db.QueryContext(ctx, `SELECT storage_key FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE thread_id = ? AND mailbox_id = ?)
+		UNION ALL SELECT raw_storage_key FROM messages WHERE thread_id = ? AND mailbox_id = ? AND raw_storage_key IS NOT NULL`, id, mailboxID, id, mailboxID)
 	if err != nil {
 		return err
 	}
@@ -316,7 +324,7 @@ func (r *Repository) DeleteThread(ctx context.Context, id string) error {
 	rows.Close()
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
 		var trashed int
-		if err := tx.QueryRowContext(ctx, "SELECT is_trashed FROM threads WHERE id = ?", id).Scan(&trashed); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT is_trashed FROM threads WHERE id = ? AND mailbox_id = ?", id, mailboxID).Scan(&trashed); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -344,14 +352,14 @@ func (r *Repository) DeleteThread(ctx context.Context, id string) error {
 }
 
 // FindInboundThread uses message relationships first and a conservative participant fallback second.
-func (r *Repository) FindInboundThread(ctx context.Context, inReplyTo, references, subjectNorm, participant string, receivedAt time.Time) (string, error) {
+func (r *Repository) FindInboundThread(ctx context.Context, mailboxID, inReplyTo, references, subjectNorm, participant string, receivedAt time.Time) (string, error) {
 	identifiers := append([]string{inReplyTo}, strings.Fields(references)...)
 	for _, identifier := range identifiers {
 		if identifier == "" {
 			continue
 		}
 		var threadID string
-		err := r.db.QueryRowContext(ctx, "SELECT thread_id FROM messages WHERE rfc_message_id = ? AND thread_id IS NOT NULL", identifier).Scan(&threadID)
+		err := r.db.QueryRowContext(ctx, "SELECT thread_id FROM messages WHERE mailbox_id = ? AND rfc_message_id = ? AND thread_id IS NOT NULL", mailboxID, identifier).Scan(&threadID)
 		if err == nil {
 			return threadID, nil
 		}
@@ -364,10 +372,10 @@ func (r *Repository) FindInboundThread(ctx context.Context, inReplyTo, reference
 	}
 	var threadID string
 	err := r.db.QueryRowContext(ctx, `SELECT t.id FROM threads t JOIN messages m ON m.thread_id = t.id
-        WHERE t.subject_norm = ? AND t.latest_message_at >= ?
+		WHERE t.mailbox_id = ? AND t.subject_norm = ? AND t.latest_message_at >= ?
           AND (LOWER(m.from_address) = LOWER(?) OR EXISTS(
               SELECT 1 FROM message_recipients mr WHERE mr.message_id = m.id AND LOWER(mr.address) = LOWER(?)))
-        ORDER BY t.latest_message_at DESC LIMIT 1`, subjectNorm, millis(receivedAt.Add(-30*24*time.Hour)), participant, participant).Scan(&threadID)
+		ORDER BY t.latest_message_at DESC LIMIT 1`, mailboxID, subjectNorm, millis(receivedAt.Add(-30*24*time.Hour)), participant, participant).Scan(&threadID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -383,7 +391,7 @@ func (r *Repository) SaveInbound(ctx context.Context, input InboundMessage) (str
 	}
 	err := r.Transaction(ctx, func(tx *sql.Tx) error {
 		var existing string
-		err := tx.QueryRowContext(ctx, "SELECT id FROM messages WHERE resend_email_id = ?", input.ResendEmailID).Scan(&existing)
+		err := tx.QueryRowContext(ctx, "SELECT id FROM messages WHERE mailbox_id = ? AND resend_email_id = ? AND direction = 'inbound'", input.MailboxID, input.ResendEmailID).Scan(&existing)
 		if err == nil {
 			messageID = existing
 			return nil
@@ -401,6 +409,14 @@ func (r *Repository) SaveInbound(ctx context.Context, input InboundMessage) (str
 				millis(time.Now()), millis(time.Now()))
 			if err != nil {
 				return err
+			}
+		} else {
+			var valid int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM threads WHERE id = ? AND mailbox_id = ?", threadID, input.MailboxID).Scan(&valid); err != nil {
+				return err
+			}
+			if valid == 0 {
+				return ErrNotFound
 			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO messages

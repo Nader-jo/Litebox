@@ -29,12 +29,11 @@ type Mailbox struct {
 	repository *repository.Repository
 	store      blobstore.Store
 	provider   provider.Client
-	mailboxID  string
 }
 
 // NewMailbox creates a mailbox service.
-func NewMailbox(cfg config.Config, repo *repository.Repository, store blobstore.Store, client provider.Client, mailboxID string) *Mailbox {
-	return &Mailbox{config: cfg, repository: repo, store: store, provider: client, mailboxID: mailboxID}
+func NewMailbox(cfg config.Config, repo *repository.Repository, store blobstore.Store, client provider.Client) *Mailbox {
+	return &Mailbox{config: cfg, repository: repo, store: store, provider: client}
 }
 
 // JobHandlers returns every supported durable work kind.
@@ -80,10 +79,18 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 	if err != nil {
 		return jobs.Permanent(fmt.Errorf("provider returned invalid CC recipients"))
 	}
-	if !mailx.IsAllowedRecipient(append(append([]model.Address{}, to...), cc...), s.config.AllowedRecipients) {
+	bcc, err := parseProviderAddresses(received.BCC)
+	if err != nil {
+		return jobs.Permanent(fmt.Errorf("provider returned invalid BCC recipients"))
+	}
+	localRecipients := append(append(append([]model.Address{}, to...), cc...), bcc...)
+	mailboxes, err := s.repository.MailboxesForRecipients(ctx, localRecipients)
+	if err != nil {
+		return err
+	}
+	if len(mailboxes) == 0 {
 		return s.repository.CompleteWebhook(ctx, webhookEventID, "ignored_unknown_recipient")
 	}
-	bcc, _ := parseProviderAddresses(received.BCC)
 	replyTo, _ := parseProviderAddresses(received.ReplyTo)
 	fromValue := received.From
 	if header := headerValue(received.Headers, "from"); header != "" {
@@ -93,27 +100,37 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 	if err != nil {
 		return jobs.Permanent(fmt.Errorf("provider returned an invalid sender"))
 	}
-	textBody := received.Text
-	if len(textBody) > int(s.config.MaxMessageTextBytes) {
-		textBody = textBody[:s.config.MaxMessageTextBytes]
+	if len(received.Text) > int(s.config.MaxMessageTextBytes) {
+		received.Text = received.Text[:s.config.MaxMessageTextBytes]
 	}
 	if len(received.HTML) > int(s.config.MaxMessageTextBytes) {
 		received.HTML = received.HTML[:s.config.MaxMessageTextBytes]
 	}
+	for _, mailbox := range mailboxes {
+		if err := s.ingestIntoMailbox(ctx, mailbox, received, from, to, cc, bcc, replyTo, bestEffort); err != nil {
+			return err
+		}
+	}
+	return s.repository.CompleteWebhook(ctx, webhookEventID, "succeeded")
+}
+
+func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, received provider.ReceivedEmail,
+	from model.Address, to, cc, bcc, replyTo []model.Address, bestEffort bool) error {
 	var attachments []model.Attachment
 	cidRoutes := make(map[string]string)
 	now := received.CreatedAt
 	for _, metadata := range received.Attachments {
-		attachmentID := ids.Stable("resend-attachment", received.ID+"/"+metadata.ID)
+		attachmentID := ids.Stable("resend-attachment", mailbox.ID+"/"+received.ID+"/"+metadata.ID)
 		if metadata.ContentID != "" {
 			cidRoutes[strings.Trim(metadata.ContentID, "<>")] = "/attachments/" + attachmentID + "/inline"
 		}
 	}
 	sanitized, blocked := mailx.SanitizeHTML(received.HTML, func(cid string) string { return cidRoutes[strings.Trim(cid, "<>")] })
+	textBody := received.Text
 	if textBody == "" && sanitized != "" {
 		textBody = mailx.TextFromHTML(sanitized)
 	}
-	input := repository.InboundMessage{MailboxID: s.mailboxID, ResendEmailID: received.ID, RFCMessageID: received.MessageID,
+	input := repository.InboundMessage{MailboxID: mailbox.ID, ResendEmailID: received.ID, RFCMessageID: received.MessageID,
 		InReplyTo: headerValue(received.Headers, "in-reply-to"), References: headerValue(received.Headers, "references"),
 		From: from, Recipients: map[string][]model.Address{"to": to, "cc": cc, "bcc": bcc, "reply_to": replyTo},
 		Subject: cleanHeader(received.Subject), TextBody: textBody, SanitizedHTML: sanitized, RemoteImagesBlocked: blocked,
@@ -124,7 +141,7 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 		}
 		input.IngestStatus = "ready_without_raw"
 	} else {
-		rawKey := blobstore.Key("raw", ids.Stable("resend-raw", received.ID), now)
+		rawKey := blobstore.Key("raw", ids.Stable("resend-raw", mailbox.ID+"/"+received.ID), now)
 		body, expected, downloadErr := s.provider.Download(ctx, received.RawURL)
 		if downloadErr == nil {
 			info, putErr := s.store.Put(ctx, rawKey, body, expected, "message/rfc822")
@@ -143,7 +160,7 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 		}
 	}
 	for _, metadata := range received.Attachments {
-		attachmentID := ids.Stable("resend-attachment", received.ID+"/"+metadata.ID)
+		attachmentID := ids.Stable("resend-attachment", mailbox.ID+"/"+received.ID+"/"+metadata.ID)
 		attachment := model.Attachment{ID: attachmentID, ProviderAttachmentID: metadata.ID, Filename: metadata.Filename,
 			SafeFilename: SafeFilename(metadata.Filename), ContentType: defaultContentType(metadata.ContentType),
 			ContentDisposition: defaultDisposition(metadata.ContentDisposition), ContentID: strings.Trim(metadata.ContentID, "<>"),
@@ -171,7 +188,8 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 		attachments = append(attachments, attachment)
 	}
 	input.Attachments = attachments
-	input.ThreadID, err = s.repository.FindInboundThread(ctx, input.InReplyTo, input.References,
+	var err error
+	input.ThreadID, err = s.repository.FindInboundThread(ctx, mailbox.ID, input.InReplyTo, input.References,
 		mailx.NormalizeSubject(input.Subject), input.From.Address, input.ReceivedAt)
 	if err != nil {
 		return err
@@ -179,7 +197,7 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 	if _, _, err := s.repository.SaveInbound(ctx, input); err != nil {
 		return err
 	}
-	return s.repository.CompleteWebhook(ctx, webhookEventID, "succeeded")
+	return nil
 }
 
 type sendPayload struct {

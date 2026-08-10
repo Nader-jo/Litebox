@@ -4,7 +4,7 @@ Provider UI and quotas change. Treat the current Resend dashboard and official d
 
 ## Domain choice
 
-Receiving for `hello@example.com` generally makes Resend responsible for inbound mail at the configured receiving domain. Any local part may reach the webhook. Litebox allows only `MAILBOX_ALLOWED_RECIPIENTS` into normal ingestion and discards unknown local parts before attachment download.
+Receiving for `hello@example.com` generally makes Resend responsible for inbound mail at the configured receiving domain. Any local part may reach the webhook. Litebox accepts only addresses registered in `mailbox_addresses` and discards unknown local parts before attachment download. `MAILBOX_ALLOWED_RECIPIENTS` idempotently seeds aliases for the primary mailbox; owners can manage additional aliases and independent mailboxes in the UI.
 
 > **MX conflict warning:** If another provider already handles mail for the same domain, changing its MX records can break that service. Consider a dedicated subdomain or plan the migration deliberately.
 

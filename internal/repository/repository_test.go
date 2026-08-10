@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,6 +14,90 @@ import (
 	"github.com/Nader-jo/Litebox/internal/model"
 	"github.com/Nader-jo/Litebox/internal/search"
 )
+
+func TestMailboxMembershipsAliasesSessionsAndIsolation(t *testing.T) {
+	ctx := context.Background()
+	repo := testRepository(t)
+	primaryID, err := repo.EnsureMailbox(ctx, "hello@example.com", "Hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repo.CreateFirstUser(ctx, "owner@example.com", "Owner", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := repo.CreateMailbox(ctx, owner.ID, "billing@example.com", "Billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddMailboxAddress(ctx, secondary.ID, "invoices@example.com", "Billing team"); err != nil {
+		t.Fatal(err)
+	}
+	mailboxes, err := repo.ListMailboxesForUser(ctx, owner.ID)
+	if err != nil || len(mailboxes) != 2 {
+		t.Fatalf("owner mailboxes=%#v err=%v", mailboxes, err)
+	}
+	routed, err := repo.MailboxesForRecipients(ctx, []model.Address{{Address: "hello@example.com"}, {Address: "invoices@example.com"}})
+	if err != nil || len(routed) != 2 {
+		t.Fatalf("routed mailboxes=%#v err=%v", routed, err)
+	}
+
+	_, primaryThread, err := repo.SaveInbound(ctx, InboundMessage{MailboxID: primaryID, ResendEmailID: "shared-provider-id",
+		RFCMessageID: "<shared@example.com>", From: model.Address{Address: "sender@example.net"},
+		Recipients: map[string][]model.Address{"to": {{Address: "hello@example.com"}}}, Subject: "Primary only", ReceivedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, secondaryThread, err := repo.SaveInbound(ctx, InboundMessage{MailboxID: secondary.ID, ResendEmailID: "shared-provider-id",
+		RFCMessageID: "<shared@example.com>", From: model.Address{Address: "sender@example.net"},
+		Recipients: map[string][]model.Address{"to": {{Address: "billing@example.com"}}}, Subject: "Billing only", ReceivedAt: time.Now()})
+	if err != nil {
+		t.Fatal("same provider message should be storable in two mailboxes:", err)
+	}
+	if _, err := repo.ThreadByID(ctx, primaryID, secondaryThread); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-mailbox thread read returned %v", err)
+	}
+	if _, err := repo.ThreadByID(ctx, secondary.ID, primaryThread); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reverse cross-mailbox thread read returned %v", err)
+	}
+	if err := repo.ThreadAction(ctx, primaryID, secondaryThread, "archive"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-mailbox mutation returned %v", err)
+	}
+
+	member, err := repo.CreateUserWithMembership(ctx, owner.ID, primaryID, "admin@example.com", "Admin", "hash", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberMailboxes, err := repo.ListMailboxesForUser(ctx, member.ID)
+	if err != nil || len(memberMailboxes) != 1 || memberMailboxes[0].ID != primaryID {
+		t.Fatalf("member access=%#v err=%v", memberMailboxes, err)
+	}
+	if err := repo.GrantMailboxAccess(ctx, owner.ID, secondary.ID, member.Email, "viewer"); err != nil {
+		t.Fatal(err)
+	}
+	memberMailboxes, _ = repo.ListMailboxesForUser(ctx, member.ID)
+	if len(memberMailboxes) != 2 {
+		t.Fatalf("expected two assigned mailboxes, got %#v", memberMailboxes)
+	}
+
+	for index := 0; index < 2; index++ {
+		if _, err := repo.CreateSession(ctx, owner.ID, auth.TokenHash(fmt.Sprintf("session-%d", index)),
+			auth.TokenHash(fmt.Sprintf("csrf-%d", index)), time.Now().Add(time.Hour), nil, fmt.Sprintf("browser-%d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessions, err := repo.ListSessions(ctx, owner.ID)
+	if err != nil || len(sessions) != 2 {
+		t.Fatalf("sessions=%#v err=%v", sessions, err)
+	}
+	if err := repo.DeleteUserSession(ctx, owner.ID, sessions[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	sessions, _ = repo.ListSessions(ctx, owner.ID)
+	if len(sessions) != 1 {
+		t.Fatalf("expected one remaining session, got %d", len(sessions))
+	}
+}
 
 func testRepository(t *testing.T) *Repository {
 	t.Helper()
@@ -87,22 +173,22 @@ func TestInboundDraftSearchAndFolderState(t *testing.T) {
 	if err != nil || messageID == "" || threadID == "" {
 		t.Fatal(messageID, threadID, err)
 	}
-	threads, err := repo.ListThreads(ctx, "inbox", 10)
+	threads, err := repo.ListThreads(ctx, mailboxID, "inbox", 10)
 	if err != nil || len(threads) != 1 || threads[0].UnreadCount != 1 {
 		t.Fatal(threads, err)
 	}
 	query, _ := search.Parse("renewal from:alice@example.com is:unread")
-	results, err := repo.SearchThreads(ctx, query, 10)
+	results, err := repo.SearchThreads(ctx, mailboxID, query, 10)
 	if err != nil || len(results) != 1 || results[0].ID != threadID {
 		t.Fatal(results, err)
 	}
-	if err := repo.MarkThreadRead(ctx, threadID, true); err != nil {
+	if err := repo.MarkThreadRead(ctx, mailboxID, threadID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ThreadAction(ctx, threadID, "archive"); err != nil {
+	if err := repo.ThreadAction(ctx, mailboxID, threadID, "archive"); err != nil {
 		t.Fatal(err)
 	}
-	archived, err := repo.ListThreads(ctx, "archive", 10)
+	archived, err := repo.ListThreads(ctx, mailboxID, "archive", 10)
 	if err != nil || len(archived) != 1 {
 		t.Fatal(archived, err)
 	}
@@ -146,11 +232,11 @@ func TestThreadAndSearchKeysetPagination(t *testing.T) {
 		}
 	}
 
-	first, more, err := repo.ListThreadsPage(ctx, "inbox", 2, time.Time{}, "")
+	first, more, err := repo.ListThreadsPage(ctx, mailboxID, "inbox", 2, time.Time{}, "")
 	if err != nil || !more || len(first) != 2 {
 		t.Fatalf("first page: len=%d more=%v err=%v", len(first), more, err)
 	}
-	second, more, err := repo.ListThreadsPage(ctx, "inbox", 2, first[1].LatestMessageAt, first[1].ID)
+	second, more, err := repo.ListThreadsPage(ctx, mailboxID, "inbox", 2, first[1].LatestMessageAt, first[1].ID)
 	if err != nil || more || len(second) != 1 || second[0].ID == first[0].ID || second[0].ID == first[1].ID {
 		t.Fatalf("second page: %#v more=%v err=%v", second, more, err)
 	}
@@ -159,11 +245,11 @@ func TestThreadAndSearchKeysetPagination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	searchFirst, more, err := repo.SearchThreadsPage(ctx, parsed, 2, time.Time{}, "")
+	searchFirst, more, err := repo.SearchThreadsPage(ctx, mailboxID, parsed, 2, time.Time{}, "")
 	if err != nil || !more || len(searchFirst) != 2 {
 		t.Fatalf("first search page: len=%d more=%v err=%v", len(searchFirst), more, err)
 	}
-	searchSecond, more, err := repo.SearchThreadsPage(ctx, parsed, 2, searchFirst[1].LatestMessageAt, searchFirst[1].ID)
+	searchSecond, more, err := repo.SearchThreadsPage(ctx, mailboxID, parsed, 2, searchFirst[1].LatestMessageAt, searchFirst[1].ID)
 	if err != nil || more || len(searchSecond) != 1 {
 		t.Fatalf("second search page: len=%d more=%v err=%v", len(searchSecond), more, err)
 	}

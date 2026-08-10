@@ -52,11 +52,19 @@ Residual risk: downloaded files can exploit local applications. Antivirus scanni
 
 Controls: Argon2id passwords; generic login errors; per-IP/account throttling; 256-bit session token; only SHA-256 token hashes in SQLite; HttpOnly/Secure/SameSite cookie; separate session-bound CSRF secret; constant-time validation on every authenticated unsafe request; session revocation on password reset.
 
-Residual risk: host/browser compromise defeats web-session controls. The MVP has one administrator and no second factor.
+Controls also include a user-visible active-session list, per-session revocation, and revocation of all sessions when a password is reset.
+
+Residual risk: host/browser compromise defeats web-session controls. Litebox does not currently provide a second factor.
+
+### Cross-mailbox access
+
+Controls: sessions authenticate a user rather than a mailbox; the active-mailbox cookie is treated as untrusted input; every request resolves current membership; mailbox content reads and mutations include `mailbox_id`; draft reply targets and attachment ownership are checked against the active mailbox; roles separate owner/admin configuration, member write access, and viewer read-only access; the last mailbox owner cannot be removed or demoted.
+
+Residual risk: Litebox is a single trusted installation, not a hostile multi-tenant service. Host, database, backup, or installation-wide operator compromise exposes all local mailboxes.
 
 ### Header injection and bulk abuse
 
-Controls: standard-library RFC address parser; CR/LF removal from user headers; fixed configured From address; 20-recipient cap; 25 MiB raw attachment cap; authenticated and CSRF-protected send routes; provider quotas remain authoritative.
+Controls: standard-library RFC address parser; CR/LF removal from user headers; outbound `From` must be an enabled database address belonging to the active mailbox; 20-recipient cap; 25 MiB raw attachment cap; authenticated and CSRF-protected send routes; provider quotas remain authoritative.
 
 Residual risk: a compromised administrator can abuse the configured provider account. Litebox is not a bulk-sending platform.
 
@@ -89,7 +97,7 @@ Secrets enter only through runtime environment/secrets. Logs intentionally omit 
 - compromise of Resend, the host kernel, Docker daemon, reverse proxy, administrator browser, DNS registrar, or backup credentials;
 - malware detection in message attachments;
 - spam/phishing classification;
-- multi-user or tenant isolation;
+- hostile multi-tenant SaaS isolation;
 - end-to-end encryption, PGP, or S/MIME;
 - deletion guarantees for provider-side temporary copies.
 

@@ -9,7 +9,7 @@
 
 **A brutally lightweight, self-hosted human mailbox powered by Resend.**
 
-Litebox gives one custom-domain address a real browser inbox without asking you to run SMTP, IMAP, Redis, Postgres, Elasticsearch, a queue broker, or a JavaScript production runtime. The default deployment is one Go container and one durable `/data` volume.
+Litebox gives custom-domain addresses real browser inboxes without asking you to run SMTP, IMAP, Redis, Postgres, Elasticsearch, a queue broker, or a JavaScript production runtime. One installation can host independent mailboxes, aliases, multiple administrators, and multiple browser sessions while retaining the one-container, one-volume default.
 
 > [!IMPORTANT]
 > Litebox is pre-1.0 software. Back up `/data`, review the [security model](docs/THREAT_MODEL.md), and test with a non-critical domain before adopting it for important mail.
@@ -26,6 +26,7 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - strict inbound HTML sanitization and remote-image blocking;
 - full-text search with useful operators;
 - first-run setup, Argon2id passwords, hashed sessions, CSRF protection, and login throttling;
+- independent mailboxes, shared aliases, per-mailbox roles, mailbox switching, and revocable device sessions;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
 
@@ -87,6 +88,8 @@ LITEBOX_HOST=mail.example.com
 
 Keep `.env` private. It is ignored by Git.
 
+`MAILBOX_PRIMARY_ADDRESS` bootstraps the first mailbox. Every address in `MAILBOX_ALLOWED_RECIPIENTS` is idempotently registered as an alias for that mailbox at startup. After setup, owners and administrators can create independent mailboxes and manage aliases from **Settings → Mailboxes**; database-managed addresses do not need to be duplicated in the environment.
+
 ### 2. Start
 
 If you already operate a reverse proxy:
@@ -105,7 +108,7 @@ docker compose --profile proxy up -d
 
 ### 3. Create the administrator
 
-Open `https://mail.example.com/setup` once. After the first user exists, unauthenticated setup is permanently disabled.
+Open `https://mail.example.com/setup` once. The first administrator becomes owner of the primary mailbox, and unauthenticated setup is then permanently disabled. Add more people and assign per-mailbox roles from **Settings → People**.
 
 For headless setup:
 
@@ -149,6 +152,17 @@ litebox version
 - `GET /health/live` checks the process only.
 - `GET /health/ready` checks SQLite and private blob storage, but deliberately does not depend on Resend availability.
 - `/admin/system` shows recent verified webhooks, job state, storage health, and database size without exposing secrets.
+
+### Mailboxes, aliases, and access
+
+- A **mailbox** has independent threads, drafts, folders, unread state, search results, and membership.
+- An **alias** receives into one mailbox and can be selected as an outbound `From` identity.
+- A user may belong to any number of mailboxes and switch between them without signing in again.
+- Roles are `owner`, `admin`, `member`, and `viewer`. Viewers cannot mutate mailbox state or send mail.
+- Each browser/device login is a separate session. Users can inspect and revoke sessions under **Settings → Sessions**.
+- If one provider message targets addresses in two independent mailboxes, Litebox archives an isolated local copy in each mailbox.
+
+See [Multi-mailbox access](docs/MULTI_MAILBOX.md) for role semantics, routing behavior, and migration details.
 
 ### Backups
 
@@ -196,6 +210,7 @@ Litebox assumes every inbound message is hostile.
 - Attachments and raw mail are never exposed through the static asset handler.
 - SVG and HTML attachments download rather than render in the application origin.
 - Session and CSRF secrets are random 256-bit values; only hashes are stored in SQLite.
+- The mailbox selector cookie is untrusted: every request resolves it through the authenticated user's membership, and content repositories require a mailbox scope.
 - Authenticated sends are capped at 30 per user per rolling hour, and each message is capped at 20 recipients.
 - Production refuses an HTTP `APP_BASE_URL` or missing Resend credentials.
 - The container is non-root, drops Linux capabilities, uses a read-only root filesystem, and writes only to `/data` and a bounded `/tmp` tmpfs.
@@ -226,6 +241,7 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | Document | Audience |
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Maintainers and integrators |
+| [Multi-mailbox access](docs/MULTI_MAILBOX.md) | Operators and administrators |
 | [Deployment](docs/DEPLOYMENT.md) | Operators |
 | [Resend setup](docs/RESEND_SETUP.md) | Domain and webhook operators |
 | [Backup and restore](docs/BACKUP_AND_RESTORE.md) | Operators |
@@ -240,7 +256,7 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 
 ## Deliberate non-goals
 
-The MVP does not implement SMTP, IMAP, POP3, JMAP, multiple users, multiple tenants, shared-inbox assignment, contacts, calendars, rich-text composition, rules, scheduled sending, or a spam classifier. Optional S3-compatible storage is a future adapter; it is not a dependency of the default system.
+Litebox does not implement SMTP, IMAP, POP3, JMAP, multi-tenant SaaS isolation, shared-inbox assignment/notes, contacts, calendars, rich-text composition, rules, scheduled sending, or a spam classifier. Optional S3-compatible storage is a future adapter; it is not a dependency of the default system.
 
 ## Community
 

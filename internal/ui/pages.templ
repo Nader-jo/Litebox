@@ -68,7 +68,7 @@ templ SetupBody(data PageData) {
 			<div class="auth-copy">
 				<p class="eyebrow">First-run setup</p>
 				<h1>Create your administrator</h1>
-				<p>This is the only user for this Litebox installation.</p>
+				<p>This first account owns the primary mailbox. You can add people and mailboxes later.</p>
 			</div>
 			if data.Error != "" {
 				<div class="alert alert-error" role="alert">{ data.Error }</div>
@@ -100,9 +100,17 @@ templ MailboxBody(data PageData) {
 				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.2-4.2m1.2-5.3a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"></path></svg>
 				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail"/>
 			</form>
+			<form class="mailbox-switcher" method="post" action="/mailboxes/select">
+				<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+				<label><span class="sr-only">Current mailbox</span><select name="mailbox_id" data-auto-submit aria-label="Current mailbox">
+					for _, mailbox := range data.Mailboxes {
+						<option value={ mailbox.ID } selected?={ mailbox.ID == data.Mailbox.ID }>{ mailbox.Address }</option>
+					}
+				</select></label>
+			</form>
 			<div class="account">
 				<span class="avatar" aria-hidden="true">{ fmt.Sprintf("%.1s", data.User.DisplayName) }</span>
-				<div><strong>{ data.User.DisplayName }</strong><small>{ data.PrimaryAddress }</small></div>
+				<div><strong>{ data.User.DisplayName }</strong><small>{ data.User.Email }</small></div>
 				<form method="post" action="/logout"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Sign out</button></form>
 			</div>
 		</header>
@@ -132,7 +140,11 @@ templ MailboxBody(data PageData) {
 
 templ Sidebar(data PageData) {
 	<aside class="sidebar" id="mailbox-navigation" data-sidebar>
-		<a class="compose-button" href="/compose"><span aria-hidden="true">＋</span> Compose</a>
+		if data.CanWrite {
+			<a class="compose-button" href="/compose"><span aria-hidden="true">＋</span> Compose</a>
+		} else {
+			<div class="read-only-pill">Read-only access</div>
+		}
 		<nav aria-label="Mailbox folders">
 			@NavItem("/inbox", "inbox", "Inbox", "⌂", data)
 			@NavItem("/starred", "starred", "Starred", "☆", data)
@@ -142,7 +154,7 @@ templ Sidebar(data PageData) {
 			@NavItem("/trash", "trash", "Trash", "⌫", data)
 		</nav>
 		<div class="sidebar-footer">
-			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/admin/system"><span>⚙</span> System</a>
+			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/settings/mailboxes"><span>⚙</span> Settings</a>
 			<div class="storage-pill"><span class="status-dot"></span> Local-first storage</div>
 		</div>
 	</aside>
@@ -223,10 +235,10 @@ templ Conversation(thread model.Thread, data PageData) {
 	<div class="conversation">
 		<div class="conversation-toolbar">
 			<a class="icon-button back-button" href={ templ.SafeURL(backURL(data)) } aria-label="Back">←</a>
-			if thread.IsTrashed {
+			if data.CanWrite && thread.IsTrashed {
 				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/restore") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Restore</button></form>
 				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Delete forever</button></form>
-			} else {
+			} else if data.CanWrite {
 				if thread.IsArchived {
 					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unarchive") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Move to Inbox</button></form>
 				} else {
@@ -247,10 +259,12 @@ templ Conversation(thread model.Thread, data PageData) {
 				@MessageCard(message)
 			}
 		</div>
-		<div class="reply-bar">
-			<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>↩ Reply</a>
-			<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
-		</div>
+		if data.CanWrite {
+			<div class="reply-bar">
+				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>↩ Reply</a>
+				<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
+			</div>
+		}
 	</div>
 }
 
@@ -320,7 +334,13 @@ templ Composer(data PageData, draft model.Draft) {
 			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<input type="hidden" name="thread_id" value={ draft.ThreadID }/>
 			<input type="hidden" name="reply_to_message_id" value={ draft.ReplyToMessageID }/>
-			<div class="composer-from"><span>From</span><strong>{ data.PrimaryAddress }</strong></div>
+			<label class="composer-from"><span>From</span><select name="from_address" required>
+				for _, address := range data.Addresses {
+					if address.OutboundEnabled {
+						<option value={ address.Address }>{ address.Address }</option>
+					}
+				}
+				</select></label>
 			<label><span>To</span><input name="to" value={ formatAddresses(draft.To) } placeholder="Jane Doe <jane@example.com>" required/></label>
 			<div class="field-grid"><label><span>Cc</span><input name="cc" value={ formatAddresses(draft.Cc) }/></label><label><span>Bcc</span><input name="bcc" value={ formatAddresses(draft.Bcc) }/></label></div>
 			<label><span>Subject</span><input name="subject" value={ draft.Subject } maxlength="998"/></label>
@@ -360,9 +380,125 @@ templ DraftList(data PageData) {
 
 templ AdminPanel(data PageData) {
 	<section class="single-column admin-panel">
-		<div class="section-header"><div><p class="eyebrow">Operator tools</p><h1>System health</h1></div><span class={ "health-badge", templ.KV("attention", systemHealth(data) != "Healthy") }>{ systemHealth(data) }</span></div>
+		<div class="section-header"><div><p class="eyebrow">{ data.PrimaryAddress } · { roleLabel(data.Mailbox.Role) }</p><h1>{ data.Title }</h1></div></div>
+		@SettingsNav(data)
+		if data.SettingsSection == "mailboxes" {
+			@MailboxSettings(data)
+		} else if data.SettingsSection == "people" {
+			@PeopleSettings(data)
+		} else if data.SettingsSection == "sessions" {
+			@SessionSettings(data)
+		} else {
+			@SystemSettings(data)
+		}
+	</section>
+}
+
+templ SettingsNav(data PageData) {
+	<nav class="settings-nav" aria-label="Settings sections">
+		<a class={ templ.KV("active", data.SettingsSection == "mailboxes") } href="/settings/mailboxes">Mailboxes</a>
+		if data.CanManage {
+			<a class={ templ.KV("active", data.SettingsSection == "people") } href="/settings/people">People</a>
+		}
+		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href="/settings/sessions">Sessions</a>
+		if data.CanOperateSystem {
+			<a class={ templ.KV("active", data.SettingsSection == "system") } href="/admin/system">System</a>
+		}
+	</nav>
+}
+
+templ MailboxSettings(data PageData) {
+	<div class="admin-section">
+		<h2>Mailbox identity</h2>
+		if data.CanManage {
+			<form class="settings-form" method="post" action="/settings/profile"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Display name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><label>Primary address<input value={ data.PrimaryAddress } disabled/></label><button class="button button-secondary" type="submit">Save profile</button></form>
+		} else {
+			<dl class="detail-list"><dt>Display name</dt><dd>{ data.MailboxName }</dd><dt>Primary address</dt><dd>{ data.PrimaryAddress }</dd></dl>
+		}
+	</div>
+	<div class="admin-section">
+		<h2>Addresses and aliases</h2>
+		<p class="section-copy">Every enabled address receives into this inbox. Send mail from any listed identity.</p>
+		<div class="address-list">
+			for _, address := range data.Addresses {
+				<div>
+					<span><strong>{ address.Address }</strong>
+						if address.IsPrimary {
+							<small class="badge">Primary</small>
+						}
+						<small>{ address.DisplayName }</small>
+					</span>
+					if data.CanManage && !address.IsPrimary {
+						<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this alias? New mail to it will no longer be accepted.">Remove</button></form>
+					}
+				</div>
+			}
+		</div>
+		if data.CanManage {
+			<form class="settings-form inline-settings" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>New alias<input name="address" type="email" placeholder="support@example.com" required/></label><label>Sender name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><button class="button button-secondary" type="submit">Add alias</button></form>
+		}
+	</div>
+	if data.CanManage {
+		<div class="admin-section">
+			<h2>Create another mailbox</h2><p class="section-copy">Independent mailboxes keep their own inbox, drafts, search, unread state, aliases, and membership list.</p>
+			<form class="settings-form inline-settings" method="post" action="/mailboxes"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Primary address<input name="address" type="email" placeholder="billing@example.com" required/></label><label>Display name<input name="display_name" maxlength="128" required/></label><button class="button button-primary" type="submit">Create mailbox</button></form>
+		</div>
+	}
+}
+
+templ PeopleSettings(data PageData) {
+	<div class="admin-section">
+		<h2>Mailbox access</h2><p class="section-copy">Permissions apply only to { data.PrimaryAddress }. Sessions inherit access from their user account.</p>
+		<div class="table-wrap"><table><thead><tr><th>Person</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>
+			for _, membership := range data.Members {
+				<tr><td><strong>{ membership.User.DisplayName }</strong><small class="table-subtitle">{ membership.User.Email }</small></td><td><span class="badge">{ roleLabel(membership.Role) }</span></td><td>
+					if membership.User.LastLoginAt != nil {
+						{ relativeTime(*membership.User.LastLoginAt) }
+					} else {
+						Never
+					}
+				</td><td>
+					if membership.User.ID != data.User.ID || membership.Role != "owner" {
+						<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/members/" + membership.User.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this person from the mailbox?">Remove</button></form>
+					}
+				</td></tr>
+			}
+		</tbody></table></div>
+	</div>
+	<div class="admin-section">
+		<h2>Add a person</h2><p class="section-copy">Enter a password to create a new administrator login. Leave it blank to grant access to an existing Litebox user.</p>
+		<form class="settings-form" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/members") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+			<div class="field-grid"><label>Email<input name="email" type="email" required/></label><label>Display name<input name="display_name" maxlength="128"/></label></div>
+			<div class="field-grid"><label>Initial password<input name="password" type="password" minlength="12" autocomplete="new-password"/><small>Required only for a new user.</small></label><label>Role<select name="role"><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option>
+				if data.Mailbox.Role == "owner" {
+					<option value="owner">Owner</option>
+				}
+			</select></label></div>
+			<button class="button button-primary" type="submit">Add person</button>
+		</form>
+	</div>
+}
+
+templ SessionSettings(data PageData) {
+	<div class="admin-section">
+		<h2>Active sessions</h2><p class="section-copy">Each browser or device has a separate revocable session. Changing your password revokes every session.</p>
+		<div class="session-list">
+			for _, session := range data.Sessions {
+				<div><span><strong>{ sessionLabel(session.UserAgent) }</strong><small>Last active { relativeTime(session.LastSeenAt) } · expires { fullTime(session.ExpiresAt) }</small></span><form method="post" action={ templ.SafeURL("/sessions/" + session.ID + "/revoke") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="button button-ghost danger" type="submit">
+					if session.ID == data.CurrentSession {
+						Sign out this session
+					} else {
+						Revoke
+					}
+				</button></form></div>
+			}
+		</div>
+	</div>
+}
+
+templ SystemSettings(data PageData) {
+	<div class="section-header compact-header"><div><h2>System health</h2></div><span class={ "health-badge", templ.KV("attention", systemHealth(data) != "Healthy") }>{ systemHealth(data) }</span></div>
 		<div class="stat-grid"><div><small>Pending jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.PendingJobs) }</strong></div><div><small>Dead jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.DeadJobs) }</strong></div><div><small>Failed attachments</small><strong>{ fmt.Sprintf("%d", data.Stats.FailedAttachments) }</strong></div><div><small>Raw archive gaps</small><strong>{ fmt.Sprintf("%d", data.Stats.MissingRawMessages) }</strong></div><div><small>Database</small><strong>{ byteSize(data.Stats.DatabaseBytes) }</strong></div><div><small>Blob storage</small><strong>{ data.StorageHealth }</strong></div></div>
-		<div class="admin-section"><h2>Mailbox identity</h2><form class="settings-form" method="post" action="/settings/profile"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Display name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><label>Primary address<input value={ data.PrimaryAddress } disabled/></label><button class="button button-secondary" type="submit">Save profile</button></form></div>
 		<div class="admin-section">
 			<h2>Recent jobs</h2>
 			<div class="table-wrap">
@@ -399,7 +535,6 @@ templ AdminPanel(data PageData) {
 				</table>
 			</div>
 		</div>
-	</section>
 }
 
 templ ErrorPage(status int, message string) {

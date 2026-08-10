@@ -112,7 +112,11 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 		t.Fatalf("save new draft status=%v location=%q err=%v", responseStatus(response), response.Header.Get("Location"), err)
 	}
 	response.Body.Close()
-	drafts, err := application.Repository.ListDrafts(context.Background(), 10)
+	mailboxID, err := application.Repository.PrimaryMailboxID(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	drafts, err := application.Repository.ListDrafts(context.Background(), mailboxID, 10)
 	if err != nil || len(drafts) != 1 {
 		t.Fatalf("list drafts len=%d err=%v", len(drafts), err)
 	}
@@ -152,7 +156,7 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 		t.Fatalf("upload attachment status=%v err=%v", responseStatus(response), err)
 	}
 	response.Body.Close()
-	storedDraft, err := application.Repository.DraftByID(context.Background(), drafts[0].ID)
+	storedDraft, err := application.Repository.DraftByID(context.Background(), mailboxID, drafts[0].ID)
 	if err != nil || len(storedDraft.Attachments) != 1 || storedDraft.Attachments[0].StorageStatus != "ready" {
 		t.Fatalf("stored attachment: %#v err=%v", storedDraft.Attachments, err)
 	}
@@ -175,6 +179,72 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 		t.Fatalf("delete draft status=%v err=%v", responseStatus(response), err)
 	}
 	response.Body.Close()
+
+	response, err = client.PostForm(server.URL+"/mailboxes", url.Values{
+		"csrf_token": {csrf}, "address": {"billing@example.com"}, "display_name": {"Billing"},
+	})
+	if err != nil || response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("create mailbox status=%v err=%v", responseStatus(response), err)
+	}
+	response.Body.Close()
+	owner, err := application.Repository.FindUserByEmail(context.Background(), "owner@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxes, err := application.Repository.ListMailboxesForUser(context.Background(), owner.ID)
+	if err != nil || len(mailboxes) != 2 {
+		t.Fatalf("mailboxes=%#v err=%v", mailboxes, err)
+	}
+	var billingID string
+	for _, mailbox := range mailboxes {
+		if mailbox.Address == "billing@example.com" {
+			billingID = mailbox.ID
+		}
+	}
+	if billingID == "" {
+		t.Fatal("new mailbox was not returned")
+	}
+	response, err = client.PostForm(server.URL+"/mailboxes/"+billingID+"/aliases", url.Values{
+		"csrf_token": {csrf}, "address": {"invoices@example.com"}, "display_name": {"Billing"},
+	})
+	if err != nil || response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add alias status=%v err=%v", responseStatus(response), err)
+	}
+	response.Body.Close()
+	response, err = client.Get(server.URL + "/settings/mailboxes")
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("mailbox settings status=%v err=%v", responseStatus(response), err)
+	}
+	settingsBody, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if !strings.Contains(string(settingsBody), "invoices@example.com") {
+		t.Fatal("alias is missing from mailbox settings")
+	}
+	response, err = client.PostForm(server.URL+"/mailboxes/"+billingID+"/members", url.Values{
+		"csrf_token": {csrf}, "email": {"billing-admin@example.com"}, "display_name": {"Billing Admin"},
+		"password": {"another correct horse battery staple"}, "role": {"admin"},
+	})
+	if err != nil || response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("add administrator status=%v err=%v", responseStatus(response), err)
+	}
+	response.Body.Close()
+	member, err := application.Repository.FindUserByEmail(context.Background(), "billing-admin@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberMailboxes, err := application.Repository.ListMailboxesForUser(context.Background(), member.ID)
+	if err != nil || len(memberMailboxes) != 1 || memberMailboxes[0].ID != billingID {
+		t.Fatalf("member mailboxes=%#v err=%v", memberMailboxes, err)
+	}
+	response, err = client.Get(server.URL + "/settings/sessions")
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("sessions settings status=%v err=%v", responseStatus(response), err)
+	}
+	sessionBody, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if !strings.Contains(string(sessionBody), "Sign out this session") {
+		t.Fatal("current session is missing from session settings")
+	}
 
 	request, _ = http.NewRequest(http.MethodPost, server.URL+"/logout", nil)
 	response, err = client.Do(request)

@@ -32,6 +32,7 @@ type requestIDKey struct{}
 type authState struct {
 	Session   model.Session
 	CSRFToken string
+	Mailbox   model.Mailbox
 }
 
 // Server owns HTTP routing and middleware.
@@ -41,7 +42,6 @@ type Server struct {
 	store      blobstore.Store
 	provider   provider.Client
 	mailbox    *service.Mailbox
-	mailboxID  string
 	logger     *slog.Logger
 	http       *http.Server
 	trusted    []*net.IPNet
@@ -50,9 +50,9 @@ type Server struct {
 }
 
 // New builds the complete HTTP server without starting a listener.
-func New(cfg config.Config, repo *repository.Repository, store blobstore.Store, providerClient provider.Client, mailbox *service.Mailbox, mailboxID string, logger *slog.Logger) (*Server, error) {
+func New(cfg config.Config, repo *repository.Repository, store blobstore.Store, providerClient provider.Client, mailbox *service.Mailbox, logger *slog.Logger) (*Server, error) {
 	server := &Server{config: cfg, repository: repo, store: store, provider: providerClient, mailbox: mailbox,
-		mailboxID: mailboxID, logger: logger, login: &loginLimiter{attempts: make(map[string][]time.Time)},
+		logger: logger, login: &loginLimiter{attempts: make(map[string][]time.Time)},
 		send: newWindowLimiter(30, time.Hour)}
 	for _, value := range cfg.TrustedProxyCIDRs {
 		_, network, err := net.ParseCIDR(value)
@@ -94,8 +94,28 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /webhooks/resend", s.webhook)
 
 	authenticated := func(handler http.HandlerFunc) http.Handler { return s.authenticate(s.csrf(handler)) }
+	writable := func(handler http.HandlerFunc) http.Handler {
+		return authenticated(func(w http.ResponseWriter, r *http.Request) {
+			if authFrom(r).Mailbox.Role == "viewer" {
+				s.renderError(w, r, http.StatusForbidden, "This mailbox membership is read-only.")
+				return
+			}
+			handler(w, r)
+		})
+	}
+	manageable := func(handler http.HandlerFunc) http.Handler {
+		return authenticated(func(w http.ResponseWriter, r *http.Request) {
+			role := authFrom(r).Mailbox.Role
+			if role != "owner" && role != "admin" {
+				s.renderError(w, r, http.StatusForbidden, "Mailbox administrator access is required.")
+				return
+			}
+			handler(w, r)
+		})
+	}
 	mux.Handle("GET /", s.authenticate(http.HandlerFunc(s.root)))
 	mux.Handle("POST /logout", authenticated(s.logout))
+	mux.Handle("POST /mailboxes/select", authenticated(s.selectMailbox))
 	for _, folder := range []string{"inbox", "sent", "archive", "starred", "trash"} {
 		folder := folder
 		mux.Handle("GET /"+folder, s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.folder(w, r, folder) })))
@@ -103,28 +123,28 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("GET /threads/{threadID}", s.authenticate(http.HandlerFunc(s.thread)))
 	for _, action := range []string{"archive", "unarchive", "star", "unstar", "trash", "restore"} {
 		action := action
-		mux.Handle("POST /threads/{threadID}/"+action, authenticated(func(w http.ResponseWriter, r *http.Request) { s.threadAction(w, r, action) }))
+		mux.Handle("POST /threads/{threadID}/"+action, writable(func(w http.ResponseWriter, r *http.Request) { s.threadAction(w, r, action) }))
 	}
-	mux.Handle("POST /threads/{threadID}/read", authenticated(func(w http.ResponseWriter, r *http.Request) { s.threadRead(w, r, true) }))
-	mux.Handle("POST /threads/{threadID}/unread", authenticated(func(w http.ResponseWriter, r *http.Request) { s.threadRead(w, r, false) }))
-	mux.Handle("POST /threads/{threadID}/delete", authenticated(s.threadDelete))
-	mux.Handle("DELETE /threads/{threadID}", authenticated(s.threadDelete))
+	mux.Handle("POST /threads/{threadID}/read", writable(func(w http.ResponseWriter, r *http.Request) { s.threadRead(w, r, true) }))
+	mux.Handle("POST /threads/{threadID}/unread", writable(func(w http.ResponseWriter, r *http.Request) { s.threadRead(w, r, false) }))
+	mux.Handle("POST /threads/{threadID}/delete", writable(s.threadDelete))
+	mux.Handle("DELETE /threads/{threadID}", writable(s.threadDelete))
 	mux.Handle("GET /threads/{threadID}/reply", s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.reply(w, r, false) })))
 	mux.Handle("GET /threads/{threadID}/reply-all", s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.reply(w, r, true) })))
 	mux.Handle("POST /threads/{threadID}/reply", authenticated(func(w http.ResponseWriter, r *http.Request) { s.reply(w, r, false) }))
 	mux.Handle("POST /threads/{threadID}/reply-all", authenticated(func(w http.ResponseWriter, r *http.Request) { s.reply(w, r, true) }))
 	mux.Handle("GET /compose", s.authenticate(http.HandlerFunc(s.compose)))
-	mux.Handle("POST /drafts", authenticated(s.createDraft))
+	mux.Handle("POST /drafts", writable(s.createDraft))
 	mux.Handle("GET /drafts", s.authenticate(http.HandlerFunc(s.drafts)))
 	mux.Handle("GET /drafts/{draftID}", s.authenticate(http.HandlerFunc(s.draft)))
-	mux.Handle("POST /drafts/{draftID}", authenticated(s.saveDraft))
-	mux.Handle("PATCH /drafts/{draftID}", authenticated(s.saveDraft))
-	mux.Handle("POST /drafts/{draftID}/send", authenticated(s.sendDraft))
-	mux.Handle("POST /drafts/{draftID}/attachments", authenticated(s.uploadAttachment))
-	mux.Handle("POST /drafts/{draftID}/attachments/{attachmentID}/delete", authenticated(s.deleteDraftAttachment))
-	mux.Handle("DELETE /drafts/{draftID}/attachments/{attachmentID}", authenticated(s.deleteDraftAttachment))
-	mux.Handle("POST /drafts/{draftID}/delete", authenticated(s.deleteDraft))
-	mux.Handle("DELETE /drafts/{draftID}", authenticated(s.deleteDraft))
+	mux.Handle("POST /drafts/{draftID}", writable(s.saveDraft))
+	mux.Handle("PATCH /drafts/{draftID}", writable(s.saveDraft))
+	mux.Handle("POST /drafts/{draftID}/send", writable(s.sendDraft))
+	mux.Handle("POST /drafts/{draftID}/attachments", writable(s.uploadAttachment))
+	mux.Handle("POST /drafts/{draftID}/attachments/{attachmentID}/delete", writable(s.deleteDraftAttachment))
+	mux.Handle("DELETE /drafts/{draftID}/attachments/{attachmentID}", writable(s.deleteDraftAttachment))
+	mux.Handle("POST /drafts/{draftID}/delete", writable(s.deleteDraft))
+	mux.Handle("DELETE /drafts/{draftID}", writable(s.deleteDraft))
 	mux.Handle("GET /attachments/{attachmentID}", s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.attachment(w, r, false) })))
 	mux.Handle("GET /attachments/{attachmentID}/inline", s.authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.attachment(w, r, true) })))
 	mux.Handle("GET /search", s.authenticate(http.HandlerFunc(s.search)))
@@ -132,9 +152,18 @@ func (s *Server) routes(mux *http.ServeMux) {
 	for _, path := range []string{"/admin/jobs", "/admin/webhooks", "/admin/storage"} {
 		mux.Handle("GET "+path, s.authenticate(http.HandlerFunc(s.admin)))
 	}
-	mux.Handle("POST /admin/jobs/{jobID}/retry", authenticated(s.retryJob))
+	mux.Handle("POST /admin/jobs/{jobID}/retry", manageable(s.retryJob))
 	mux.Handle("GET /settings", s.authenticate(http.HandlerFunc(s.admin)))
-	mux.Handle("POST /settings/profile", authenticated(s.updateSettings))
+	mux.Handle("GET /settings/mailboxes", s.authenticate(http.HandlerFunc(s.admin)))
+	mux.Handle("GET /settings/people", s.authenticate(http.HandlerFunc(s.admin)))
+	mux.Handle("GET /settings/sessions", s.authenticate(http.HandlerFunc(s.admin)))
+	mux.Handle("POST /settings/profile", manageable(s.updateSettings))
+	mux.Handle("POST /mailboxes", manageable(s.createMailbox))
+	mux.Handle("POST /mailboxes/{mailboxID}/aliases", manageable(s.addAlias))
+	mux.Handle("POST /mailboxes/{mailboxID}/aliases/{addressID}/delete", manageable(s.deleteAlias))
+	mux.Handle("POST /mailboxes/{mailboxID}/members", manageable(s.addMember))
+	mux.Handle("POST /mailboxes/{mailboxID}/members/{userID}/delete", manageable(s.removeMember))
+	mux.Handle("POST /sessions/{sessionID}/revoke", authenticated(s.revokeSession))
 }
 
 func (s *Server) requestID(next http.Handler) http.Handler {
@@ -182,12 +211,28 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			s.redirectLogin(w, r)
 			return
 		}
+		if time.Since(session.LastSeenAt) >= 5*time.Minute {
+			_ = s.repository.TouchSession(r.Context(), session.ID, session.User.ID, false)
+			session.LastSeenAt = time.Now().UTC()
+		}
 		csrfCookie, _ := r.Cookie(s.config.CookieName + "_csrf")
 		csrfToken := ""
 		if csrfCookie != nil && auth.VerifyToken(csrfCookie.Value, session.CSRFHash) {
 			csrfToken = csrfCookie.Value
 		}
-		state := authState{Session: session, CSRFToken: csrfToken}
+		preferredMailbox := ""
+		if mailboxCookie, cookieErr := r.Cookie(s.config.CookieName + "_mailbox"); cookieErr == nil {
+			preferredMailbox = mailboxCookie.Value
+		}
+		mailbox, err := s.repository.MailboxForUser(r.Context(), session.User.ID, preferredMailbox)
+		if err != nil {
+			s.renderError(w, r, http.StatusForbidden, "Your account does not have access to a mailbox.")
+			return
+		}
+		if preferredMailbox != mailbox.ID {
+			s.setMailboxCookie(w, mailbox.ID)
+		}
+		state := authState{Session: session, CSRFToken: csrfToken, Mailbox: mailbox}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authKey{}, state)))
 	})
 }
@@ -257,10 +302,16 @@ func (s *Server) setSessionCookies(w http.ResponseWriter, sessionToken, csrfToke
 }
 
 func (s *Server) clearCookies(w http.ResponseWriter) {
-	for _, name := range []string{s.config.CookieName, s.config.CookieName + "_csrf"} {
+	for _, name := range []string{s.config.CookieName, s.config.CookieName + "_csrf", s.config.CookieName + "_mailbox"} {
 		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == s.config.CookieName,
 			Secure: s.config.SecureCookies(), SameSite: http.SameSiteLaxMode})
 	}
+}
+
+func (s *Server) setMailboxCookie(w http.ResponseWriter, mailboxID string) {
+	http.SetCookie(w, &http.Cookie{Name: s.config.CookieName + "_mailbox", Value: mailboxID, Path: "/",
+		MaxAge: int(s.config.SessionTTL.Seconds()), Expires: time.Now().Add(s.config.SessionTTL), HttpOnly: true,
+		Secure: s.config.SecureCookies(), SameSite: http.SameSiteLaxMode})
 }
 
 func authFrom(r *http.Request) authState {

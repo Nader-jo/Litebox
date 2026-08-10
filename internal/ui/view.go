@@ -13,28 +13,38 @@ import (
 
 // PageData is the bounded view model shared by full and progressively enhanced pages.
 type PageData struct {
-	Title          string
-	PrimaryAddress string
-	User           model.User
-	CSRFToken      string
-	CurrentFolder  string
-	Threads        []model.ThreadSummary
-	Thread         *model.Thread
-	Draft          *model.Draft
-	Drafts         []model.Draft
-	Jobs           []model.Job
-	Webhooks       []model.WebhookEvent
-	Stats          model.SystemStats
-	SearchQuery    string
-	StorageHealth  string
-	MailboxName    string
-	Error          string
-	Notice         string
-	HasUser        bool
-	CurrentCursor  string
-	NextPageURL    string
-	FirstPageURL   string
-	BackURL        string
+	Title            string
+	PrimaryAddress   string
+	User             model.User
+	CSRFToken        string
+	CurrentFolder    string
+	Threads          []model.ThreadSummary
+	Thread           *model.Thread
+	Draft            *model.Draft
+	Drafts           []model.Draft
+	Jobs             []model.Job
+	Webhooks         []model.WebhookEvent
+	Stats            model.SystemStats
+	SearchQuery      string
+	StorageHealth    string
+	MailboxName      string
+	Mailbox          model.Mailbox
+	Mailboxes        []model.Mailbox
+	Addresses        []model.MailboxAddress
+	Members          []model.MailboxMembership
+	Sessions         []model.Session
+	CurrentSession   string
+	SettingsSection  string
+	CanManage        bool
+	CanWrite         bool
+	CanOperateSystem bool
+	Error            string
+	Notice           string
+	HasUser          bool
+	CurrentCursor    string
+	NextPageURL      string
+	FirstPageURL     string
+	BackURL          string
 }
 
 func threadURL(id string, data PageData) string {
@@ -150,4 +160,22 @@ func draftAction(id string) string {
 		return "/drafts"
 	}
 	return "/drafts/" + id
+}
+
+func roleLabel(value string) string {
+	if value == "" {
+		return "Member"
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+func sessionLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "Unknown browser"
+	}
+	if len(value) > 90 {
+		return value[:87] + "…"
+	}
+	return value
 }
