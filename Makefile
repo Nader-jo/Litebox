@@ -2,8 +2,10 @@ GO ?= go
 TEMPL_VERSION := v0.3.1020
 STATICCHECK_VERSION := v0.7.0
 GOVULNCHECK_VERSION := v1.6.0
+ACTIONLINT_VERSION := v1.7.12
+GORELEASER_VERSION := v2.17.1
 
-.PHONY: help bootstrap generate generated-check fmt fmt-check lint test test-race build run doctor vuln compose-up compose-down compose-config check clean
+.PHONY: help bootstrap generate generated-check fmt fmt-check lint workflow-lint release-check test test-race build run doctor vuln compose-up compose-down compose-config check clean
 
 help:
 	@echo "Litebox development targets"
@@ -13,6 +15,8 @@ help:
 	@echo "  fmt            format Go and templ sources"
 	@echo "  fmt-check      verify Go formatting without changing files"
 	@echo "  lint           run go vet and staticcheck"
+	@echo "  workflow-lint  validate GitHub Actions workflow syntax"
+	@echo "  release-check  validate the GoReleaser configuration"
 	@echo "  test           run the complete test suite"
 	@echo "  test-race      run tests with the race detector"
 	@echo "  build          build bin/litebox"
@@ -44,6 +48,12 @@ lint: generate
 	$(GO) vet ./...
 	$(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
+workflow-lint:
+	$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
+
+release-check:
+	$(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) check
+
 test: generate
 	$(GO) test -cover ./...
 
@@ -71,7 +81,7 @@ compose-down:
 compose-config:
 	docker compose config --quiet
 
-check: generated-check fmt-check lint test-race vuln build compose-config
+check: generated-check fmt-check lint workflow-lint release-check test-race vuln build compose-config
 
 clean:
 	$(GO) clean
