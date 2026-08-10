@@ -11,8 +11,8 @@ receives fixes but is not a supported production release.
 
 | Version | Supported |
 | --- | --- |
-| Latest stable minor | Yes |
-| Older releases | No |
+| `0.1.x` | Yes |
+| `< 0.1.0` | No |
 | `develop` snapshots | No |
 
 ## Report a vulnerability

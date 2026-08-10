@@ -4,6 +4,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-10
+
 ### Added
 
 - Initial build-ready mailbox implementation.
@@ -21,3 +23,4 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
 [Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Nader-jo/Litebox/releases/tag/v0.1.0
