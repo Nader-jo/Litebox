@@ -203,7 +203,7 @@ Review [SECURITY.md](SECURITY.md) for reporting and supported versions, and [Thr
 
 ## Development
 
-Requirements: Go 1.26+, Docker, and GNU Make (optional).
+Requirements: Go 1.26.5+, Docker, and GNU Make (optional). The patch-level floor includes required Go standard-library security fixes.
 
 ```bash
 make bootstrap # install pinned contributor tools
