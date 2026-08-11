@@ -137,17 +137,28 @@ jobs:
       - name: Verify and smoke-test published platforms
         shell: bash
         env:
-          IMAGE: ghcr.io/nader-jo/litebox@${{ steps.image.outputs.digest }}
+          IMAGE_REPOSITORY: ghcr.io/nader-jo/litebox
+          INDEX_IMAGE: ghcr.io/nader-jo/litebox@${{ steps.image.outputs.digest }}
         run: |
           set -euo pipefail
-          manifest="$(docker buildx imagetools inspect --raw "$IMAGE")"
+          manifest="$(docker buildx imagetools inspect --raw "$INDEX_IMAGE")"
           echo "$manifest" | jq -e '
             [.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] as $platforms
             | ($platforms | index("linux/amd64") != null)
               and ($platforms | index("linux/arm64") != null)
           '
-          bash scripts/smoke-container.sh "$IMAGE" linux/amd64
-          bash scripts/smoke-container.sh "$IMAGE" linux/arm64
+          platform_digest() {
+            echo "$manifest" | jq -er --arg architecture "$1" '
+              [.manifests[]
+                | select(.platform.os == "linux" and .platform.architecture == $architecture)
+                | .digest]
+              | if length == 1 then .[0] else error("expected exactly one platform manifest") end
+            '
+          }
+          amd64_digest="$(platform_digest amd64)"
+          arm64_digest="$(platform_digest arm64)"
+          bash scripts/smoke-container.sh "${IMAGE_REPOSITORY}@${amd64_digest}" linux/amd64
+          bash scripts/smoke-container.sh "${IMAGE_REPOSITORY}@${arm64_digest}" linux/arm64
       - name: Publish verified GitHub release
         shell: bash
         env:

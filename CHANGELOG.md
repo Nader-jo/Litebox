@@ -4,6 +4,10 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Verify each architecture by its immutable child-manifest digest so sequential multi-platform release smoke tests cannot collide in Docker's local image store.
+
 ## [0.2.0] - 2026-08-11
 
 ### Added
