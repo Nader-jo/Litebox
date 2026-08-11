@@ -4,6 +4,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-11
+
 ### Fixed
 
 - Verify each architecture by its immutable child-manifest digest so sequential multi-platform release smoke tests cannot collide in Docker's local image store.
@@ -51,6 +53,7 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Nader-jo/Litebox/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nader-jo/Litebox/releases/tag/v0.1.0

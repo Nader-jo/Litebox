@@ -22,7 +22,7 @@ Docker automatically selects the matching image from a version tag. Thirty-two-b
 Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
 
 ```bash
-VERSION=0.2.0 # replace with the current release
+VERSION=0.2.1 # replace with the current release
 install -d -m 0750 /opt/litebox
 cd /opt/litebox
 curl --fail --location --output litebox-vps.tar.gz \
@@ -91,7 +91,7 @@ If your platform overrides these controls, preserve write access to `/data` and 
 Inspect the published manifest before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.0
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.1
 ```
 
 The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
@@ -100,7 +100,7 @@ If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance atte
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/nader-jo/litebox:0.2.0 \
+  oci://ghcr.io/nader-jo/litebox:0.2.1 \
   --repo Nader-jo/Litebox
 ```
 
@@ -119,7 +119,7 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.0|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.1|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor

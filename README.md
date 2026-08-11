@@ -71,7 +71,7 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 ### 1. Download a release bundle
 
 ```bash
-VERSION=0.2.0 # replace with the current release
+VERSION=0.2.1 # replace with the current release
 install -d -m 0750 /opt/litebox
 cd /opt/litebox
 curl --fail --location --output litebox-vps.tar.gz \
@@ -148,7 +148,7 @@ See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict war
 
 ## Operations
 
-Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.0`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.1`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 

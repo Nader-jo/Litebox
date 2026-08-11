@@ -36,14 +36,14 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 Consumers can verify a downloaded archive with GitHub CLI:
 
 ```bash
-gh attestation verify litebox_0.2.0_linux_amd64.tar.gz --repo Nader-jo/Litebox
+gh attestation verify litebox_0.2.1_linux_amd64.tar.gz --repo Nader-jo/Litebox
 ```
 
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.2.0 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.0
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.2.1 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.1
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -53,8 +53,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.2.0 -m "Litebox v0.2.0"
-git push origin v0.2.0
+git tag -s v0.2.1 -m "Litebox v0.2.1"
+git push origin v0.2.1
 ```
 
 ## Release failure
