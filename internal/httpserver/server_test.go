@@ -108,7 +108,7 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 		"intent":     {"save"},
 	}
 	response, err = client.PostForm(server.URL+"/drafts", draft)
-	if err != nil || response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/drafts" {
+	if err != nil || response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/drafts?notice=draft-saved" {
 		t.Fatalf("save new draft status=%v location=%q err=%v", responseStatus(response), response.Header.Get("Location"), err)
 	}
 	response.Body.Close()

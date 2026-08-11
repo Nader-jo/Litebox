@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# Keep the fixture independent from development-container defaults and the
+# contributor's shell. Every installer input used below is declared explicitly.
+unset APP_BASE_URL
+
 repo_dir=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 test_dir=$(mktemp -d)
 cleanup() {
@@ -15,6 +19,9 @@ mkdir -p "$fixture/bundle" "$mock_bin"
 cp "$repo_dir/compose.yaml" "$repo_dir/Caddyfile" "$repo_dir/.env.example" \
 	"$repo_dir/LICENSE" "$repo_dir/NOTICE" "$repo_dir/setup.sh" "$fixture/bundle/"
 cp "$repo_dir/docs/DEPLOYMENT.md" "$fixture/bundle/DEPLOYMENT.md"
+cp "$repo_dir/docs/UPGRADING.md" "$fixture/bundle/UPGRADING.md"
+cp "$repo_dir/docs/BACKUP_AND_RESTORE.md" "$fixture/bundle/BACKUP_AND_RESTORE.md"
+cp "$repo_dir/docs/USER_GUIDE.md" "$fixture/bundle/USER_GUIDE.md"
 sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:9.8.7|' "$fixture/bundle/.env.example"
 tar -czf "$fixture/litebox_9.8.7_vps.tar.gz" -C "$fixture/bundle" .
 (cd "$fixture" && sha256sum litebox_9.8.7_vps.tar.gz >litebox_9.8.7_vps.tar.gz.sha256)
@@ -75,6 +82,8 @@ grep -q '^APP_BASE_URL=https://mail.example.test$' "$install_dir/.env"
 grep -q '^MAILBOX_PRIMARY_ADDRESS=owner@example.test$' "$install_dir/.env"
 grep -q '^MAILBOX_DISPLAY_NAME=Example Team$' "$install_dir/.env"
 grep -q '^LITEBOX_USE_CADDY=0$' "$install_dir/.env"
+[ -f "$install_dir/UPGRADING.md" ]
+[ -f "$install_dir/USER_GUIDE.md" ]
 grep -q '^compose config --quiet$' "$test_dir/docker.log"
 case "$output" in
 *re_private_test* | *whsec_private_test*)

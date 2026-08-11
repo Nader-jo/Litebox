@@ -1,0 +1,29 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  allow-parallel-runners: true
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - unconvert
+  settings:
+    errcheck:
+      # Cleanup paths deliberately preserve the primary operation error. Code
+      # that must durably flush a write (for example FileStore.Put) checks Close
+      # explicitly before committing it.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*github.com/Nader-jo/Litebox/internal/app.App).Close
+        - os.RemoveAll
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

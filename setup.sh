@@ -391,7 +391,7 @@ run_install() {
 	if ! mkdir -p "$install_dir" 2>/dev/null; then
 		die "cannot create $install_dir; rerun with sudo or choose --install-dir"
 	fi
-	for file in compose.yaml Caddyfile .env.example DEPLOYMENT.md LICENSE NOTICE setup.sh; do
+	for file in compose.yaml Caddyfile .env.example DEPLOYMENT.md UPGRADING.md BACKUP_AND_RESTORE.md USER_GUIDE.md LICENSE NOTICE setup.sh; do
 		if [ -f "$temporary_dir/extracted/$file" ]; then
 			cp "$temporary_dir/extracted/$file" "$install_dir/$file"
 		fi
@@ -448,6 +448,8 @@ EOF
 	fi
 	base_url=$(get_env APP_BASE_URL)
 	host=$(get_env LITEBOX_HOST)
+	upgrade_guide="$install_dir/UPGRADING.md"
+	[ -f "$upgrade_guide" ] || upgrade_guide="https://github.com/$repository/blob/develop/docs/UPGRADING.md"
 	cat <<EOF
 
 Litebox $version is ready.
@@ -458,6 +460,7 @@ Litebox $version is ready.
 
 Installation directory: $install_dir
 Status command:          cd $install_dir && docker compose ps
+Upgrade guide:           $upgrade_guide
 EOF
 }
 

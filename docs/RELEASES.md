@@ -13,7 +13,7 @@ Pushing a signed `v*` tag runs `.github/workflows/release.yml` after tests. The 
 - a generated GitHub release/changelog;
 - a multi-platform GHCR image for Linux amd64/arm64;
 - a checksum-pinned `setup.sh` release asset for guided installation and private demo mode;
-- a version-pinned VPS bundle containing the installer, Compose, Caddy, `.env.example`, deployment documentation, and licenses;
+- a version-pinned VPS bundle containing the installer, Compose, Caddy, `.env.example`, user/deployment/backup/upgrade guides, and licenses;
 - OCI metadata, BuildKit provenance, an image SBOM, and GitHub/Sigstore image provenance.
 
 GoReleaser creates the GitHub release as a draft. The workflow publishes that draft only after the GHCR manifest contains both supported platforms and both published images pass the hardened health smoke test. A container failure therefore cannot advertise a completed GitHub release.
@@ -37,14 +37,14 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 Consumers can verify a downloaded archive with GitHub CLI:
 
 ```bash
-gh attestation verify litebox_0.2.2_linux_amd64.tar.gz --repo Nader-jo/Litebox
+gh attestation verify litebox_0.3.0_linux_amd64.tar.gz --repo Nader-jo/Litebox
 ```
 
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.2.2 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.2
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.3.0 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.0
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -54,8 +54,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.2.2 -m "Litebox v0.2.2"
-git push origin v0.2.2
+git tag -s v0.3.0 -m "Litebox v0.3.0"
+git push origin v0.3.0
 ```
 
 ## Release failure

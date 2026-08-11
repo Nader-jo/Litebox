@@ -68,6 +68,9 @@ jobs:
           trap 'rm -rf "$staging"' EXIT
           cp compose.yaml Caddyfile .env.example LICENSE NOTICE setup.sh "$staging/"
           cp docs/DEPLOYMENT.md "$staging/DEPLOYMENT.md"
+          cp docs/UPGRADING.md "$staging/UPGRADING.md"
+          cp docs/BACKUP_AND_RESTORE.md "$staging/BACKUP_AND_RESTORE.md"
+          cp docs/USER_GUIDE.md "$staging/USER_GUIDE.md"
           sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${version}|" "$staging/.env.example"
           mkdir -p release
           bundle="litebox_${version}_vps.tar.gz"

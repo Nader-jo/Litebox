@@ -13,6 +13,7 @@ templ Document(title string, body templ.Component) {
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="color-scheme" content="light"/>
+			<meta name="theme-color" content="#f8f9fb"/>
 			<title>{ title } · Litebox</title>
 			<link rel="stylesheet" href="/static/app.css"/>
 			<script defer src="/static/htmx.min.js"></script>
@@ -96,9 +97,10 @@ templ MailboxBody(data PageData) {
 		<header class="topbar">
 			<button class="icon-button menu-button" type="button" data-sidebar-toggle aria-label="Open navigation" aria-controls="mailbox-navigation" aria-expanded="false">@Icon("menu")</button>
 			@Brand()
-			<form class="search" method="get" action="/search" role="search">
+			<form class="search" id="global-search" method="get" action="/search" role="search" data-global-search>
 				@Icon("search")
-				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail"/>
+				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail" autocomplete="off" data-search-input/>
+				<kbd class="search-shortcut" aria-hidden="true">/</kbd>
 			</form>
 			<form class="mailbox-switcher" method="post" action="/mailboxes/select">
 				<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
@@ -108,10 +110,11 @@ templ MailboxBody(data PageData) {
 					}
 				</select></label>
 			</form>
+			<button class="icon-button mobile-search-button" type="button" data-search-toggle aria-label="Open search" aria-controls="global-search" aria-expanded="false">@Icon("search")</button>
 			<div class="account">
 				<span class="avatar" aria-hidden="true">{ fmt.Sprintf("%.1s", data.User.DisplayName) }</span>
 				<div><strong>{ data.User.DisplayName }</strong><small>{ data.User.Email }</small></div>
-				<form method="post" action="/logout"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Sign out</button></form>
+				<form method="post" action="/logout"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button signout-button" type="submit" aria-label="Sign out"><span>Sign out</span>@Icon("logout")</button></form>
 			</div>
 		</header>
 		<div class="app-shell">
@@ -121,7 +124,11 @@ templ MailboxBody(data PageData) {
 					<div class="alert alert-error" role="alert">{ data.Error }</div>
 				}
 				if data.Notice != "" {
-					<div class="alert alert-success" role="status">{ data.Notice }</div>
+					<div class="toast alert-success" role="status" data-toast>
+						<span class="toast-icon">@Icon("check")</span>
+						<span><strong>{ data.Notice }</strong><small>Your change is safely recorded.</small></span>
+						<button type="button" data-dismiss-toast aria-label="Dismiss notification">@Icon("close")</button>
+					</div>
 				}
 				if data.Draft != nil {
 					@Composer(data, *data.Draft)
@@ -135,13 +142,14 @@ templ MailboxBody(data PageData) {
 			</main>
 		</div>
 		<button class="sidebar-backdrop" type="button" data-sidebar-toggle aria-label="Close navigation" tabindex="-1"></button>
+		@ShortcutDialog()
 	</body>
 }
 
 templ Sidebar(data PageData) {
 	<aside class="sidebar" id="mailbox-navigation" data-sidebar>
 		if data.CanWrite {
-			<a class="compose-button" href="/compose">@Icon("plus")<span>Compose</span></a>
+			<a class="compose-button" href="/compose" aria-keyshortcuts="c">@Icon("plus")<span>Compose</span><kbd aria-hidden="true">C</kbd></a>
 		} else {
 			<div class="read-only-pill">Read-only access</div>
 		}
@@ -155,6 +163,7 @@ templ Sidebar(data PageData) {
 		</nav>
 		<div class="sidebar-footer">
 			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/settings/mailboxes">@Icon("settings")<span>Settings</span></a>
+			<button class="sidebar-help" type="button" data-shortcuts-open>@Icon("keyboard")<span>Keyboard shortcuts</span><kbd aria-hidden="true">?</kbd></button>
 			<div class="storage-pill"><span class="status-dot"></span> Local-first storage</div>
 		</div>
 	</aside>
@@ -171,7 +180,7 @@ templ MailboxWorkspace(data PageData) {
 			<span class="count">{ fmt.Sprintf("%d", len(data.Threads)) }</span>
 		</div>
 		if len(data.Threads) == 0 {
-			@EmptyMailbox(data.CurrentFolder)
+			@EmptyMailbox(data.CurrentFolder, data.CanWrite)
 		} else {
 			<div class="thread-list">
 				for _, item := range data.Threads {
@@ -200,7 +209,7 @@ templ MailboxWorkspace(data PageData) {
 }
 
 templ ThreadRow(item model.ThreadSummary, data PageData) {
-	<a href={ templ.SafeURL(threadURL(item.ID, data)) } class={ "thread-row", templ.KV("unread", item.UnreadCount > 0), templ.KV("selected", data.Thread != nil && data.Thread.ID == item.ID) }>
+	<a href={ templ.SafeURL(threadURL(item.ID, data)) } class={ "thread-row", templ.KV("unread", item.UnreadCount > 0), templ.KV("selected", data.Thread != nil && data.Thread.ID == item.ID) } data-thread-row>
 		<div class="thread-row-top"><strong>{ item.Participants }</strong><time datetime={ item.LatestMessageAt.Format(time.RFC3339) }>{ relativeTime(item.LatestMessageAt) }</time></div>
 		<div class="thread-subject">
 			<span>{ displaySubject(item.Subject) }</span>
@@ -223,8 +232,12 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 	</a>
 }
 
-templ EmptyMailbox(folder string) {
-	<div class="empty-state"><div class="empty-icon">@Icon("mail")</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p><a class="button button-secondary" href="/compose">Write a message</a></div>
+templ EmptyMailbox(folder string, canWrite bool) {
+	<div class="empty-state"><div class="empty-icon">@Icon("mail")</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p>
+		if canWrite {
+			<a class="button button-secondary" href="/compose">Write a message</a>
+		}
+	</div>
 }
 
 templ ReaderEmpty() {
@@ -261,7 +274,7 @@ templ Conversation(thread model.Thread, data PageData) {
 		</div>
 		if data.CanWrite {
 			<div class="reply-bar">
-				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>@Icon("reply") Reply</a>
+				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") } aria-keyshortcuts="r" data-shortcut-reply>@Icon("reply") Reply</a>
 				<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
 			</div>
 		}
@@ -330,7 +343,7 @@ templ Composer(data PageData, draft model.Draft) {
 		if draft.ID != "" {
 			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL("/drafts/" + draft.ID + "/attachments") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">@Icon("paperclip") Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
 		}
-		<form class="composer-form" method="post" action={ templ.SafeURL(draftAction(draft.ID)) }>
+		<form class="composer-form" method="post" action={ templ.SafeURL(draftAction(draft.ID)) } data-compose-form>
 			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<input type="hidden" name="thread_id" value={ draft.ThreadID }/>
 			<input type="hidden" name="reply_to_message_id" value={ draft.ReplyToMessageID }/>
@@ -358,7 +371,8 @@ templ Composer(data PageData, draft model.Draft) {
 				} else {
 					<button class="button button-ghost" type="submit" name="intent" value="continue">Save to add files</button>
 				}
-				<button class="button button-secondary" type="submit" name="intent" value="save">Save & close</button><button class="button button-primary" type="submit" name="intent" value="send">Send message</button>
+				<button class="button button-secondary" type="submit" name="intent" value="save" data-pending-label="Saving…"><span class="button-label">Save & close</span></button>
+				<button class="button button-primary" type="submit" name="intent" value="send" data-pending-label="Sending…">@Icon("send")<span class="button-label">Send message</span></button>
 			</div>
 		</form>
 	</section>
@@ -367,7 +381,7 @@ templ Composer(data PageData, draft model.Draft) {
 templ DraftList(data PageData) {
 	<section class="single-column"><div class="section-header"><div><p class="eyebrow">Saved locally</p><h1>Drafts</h1></div><span class="count">{ fmt.Sprintf("%d", len(data.Drafts)) }</span></div>
 		if len(data.Drafts) == 0 {
-			@EmptyMailbox("drafts")
+			@EmptyMailbox("drafts", data.CanWrite)
 		} else {
 			<div class="draft-list">
 				for _, draft := range data.Drafts {
@@ -376,6 +390,24 @@ templ DraftList(data PageData) {
 			</div>
 		}
 	</section>
+}
+
+templ ShortcutDialog() {
+	<dialog class="shortcut-dialog" data-shortcuts-dialog aria-labelledby="shortcut-title">
+		<div class="shortcut-dialog-header">
+			<div><p class="eyebrow">Move faster</p><h2 id="shortcut-title">Keyboard shortcuts</h2></div>
+			<form method="dialog"><button class="icon-button" value="cancel" aria-label="Close keyboard shortcuts">@Icon("close")</button></form>
+		</div>
+		<dl class="shortcut-list">
+			<div><dt><kbd>C</kbd></dt><dd><strong>Compose</strong><span>Start a new message</span></dd></div>
+			<div><dt><kbd>/</kbd></dt><dd><strong>Search</strong><span>Focus the mail search</span></dd></div>
+			<div><dt><kbd>J</kbd><kbd>K</kbd></dt><dd><strong>Browse</strong><span>Move through conversations</span></dd></div>
+			<div><dt><kbd>R</kbd></dt><dd><strong>Reply</strong><span>Reply to the open conversation</span></dd></div>
+			<div><dt><kbd>G</kbd><kbd>I</kbd></dt><dd><strong>Go to Inbox</strong><span>Use G then S, D, A, or T for other folders</span></dd></div>
+			<div><dt><kbd>?</kbd></dt><dd><strong>Shortcut help</strong><span>Open this reference</span></dd></div>
+		</dl>
+		<p class="shortcut-note">Shortcuts pause while you type in a field. Press <kbd>Esc</kbd> to close panels.</p>
+	</dialog>
 }
 
 templ AdminPanel(data PageData) {

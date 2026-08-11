@@ -11,8 +11,9 @@ Litebox is maintained as a community open-source project.
 - Use a private security advisory for vulnerabilities; see
   [SECURITY.md](SECURITY.md).
 
-Before asking, check the [README](README.md), the documentation under `docs/`,
-closed issues, and the output of `mailbox doctor --deep`.
+Before asking, check the [User guide](docs/USER_GUIDE.md), [README](README.md),
+the documentation under `docs/`, closed issues, and the output of
+`mailbox doctor --deep` when you operate the server.
 
 Community support is best-effort and has no response-time guarantee. Include the
 Litebox version, deployment method, operating system, redacted configuration,

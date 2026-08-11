@@ -13,10 +13,12 @@ No Node.js toolchain is used. HTMX is vendored and the UI is authored in templ p
 ```bash
 git clone https://github.com/Nader-jo/Litebox.git
 cd Litebox
-go mod download
-make generate
-make test
+make setup
 ```
+
+This single command downloads modules, installs every pinned contributor tool,
+generates committed templ output, validates Compose, and runs focused smoke
+tests. Re-running it is safe.
 
 Local development defaults to `.data/` and `hello@example.com`; Resend credentials are optional until a provider workflow is exercised.
 
@@ -34,6 +36,24 @@ make container-smoke
 ```
 
 Production Compose intentionally has no `build` section; it consumes the published multi-platform image.
+
+## Development container
+
+`Dockerfile.dev` provides the pinned Go and C toolchains plus repository tools
+without installing them on the host. The C toolchain keeps race-detector tests
+available inside the container:
+
+```bash
+docker build -f Dockerfile.dev -t litebox:dev .
+docker run --rm -it -p 8080:8080 \
+  -v "$PWD:/workspace" -v litebox-go-modules:/go/pkg/mod \
+  litebox:dev
+```
+
+The source bind mount keeps edits on the host. Development data is written to
+the ignored `.data/` directory. Add `-v /var/run/docker.sock:/var/run/docker.sock`
+only when you understand that this gives the container control of the host
+Docker daemon and need to run Compose or container smoke tests inside it.
 
 ## Generated UI
 
@@ -73,6 +93,7 @@ Interface icons use the exact outline paths from [Tabler Icons](https://tabler.i
 make test
 make test-race
 make lint
+make golangci-lint
 make workflow-lint
 make release-check
 make onboarding-check
@@ -84,6 +105,10 @@ make container-smoke
 and an isolated fixture that verifies download checksum handling, secret-safe
 configuration, Compose validation, and idempotent upgrades. It does not contact
 GitHub or start a real Litebox container.
+
+`make golangci-lint` runs golangci-lint v2 with the repository's checked-in
+configuration. CI runs it for every push and pull request in addition to Go
+vet and staticcheck.
 
 CI builds and health-checks both `linux/amd64` and `linux/arm64`. The release workflow repeats those checks against the published digest before making the draft GitHub release public.
 

@@ -7,6 +7,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nader-jo/Litebox/badge)](https://scorecard.dev/viewer/?uri=github.com/Nader-jo/Litebox)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Nader-jo/Litebox)](https://goreportcard.com/report/github.com/Nader-jo/Litebox)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Contributions welcome](https://img.shields.io/badge/contributions-welcome-12b76a.svg)](CONTRIBUTING.md)
 
 **A brutally lightweight, self-hosted human mailbox powered by Resend.**
 
@@ -31,6 +32,7 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - one signed GHCR image tag that runs on Linux AMD64 and ARM64 VPS hosts;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
+- mobile search, keyboard navigation, shortcut help, and clear progress/confirmation feedback.
 
 Litebox is a mailbox, not a mail server and not a Gmail clone.
 
@@ -130,7 +132,7 @@ See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict war
 
 ## Operations
 
-Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.2`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.3.0`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 
@@ -222,8 +224,8 @@ Review [SECURITY.md](SECURITY.md) for reporting and supported versions, and [Thr
 Requirements: Go 1.26.5+, Docker, and GNU Make (optional). The patch-level floor includes required Go standard-library security fixes.
 
 ```bash
-make bootstrap # install pinned contributor tools
-make check     # generate, format, lint, race-test, audit, build, and validate Compose
+make setup # install pinned tools, generate code, and validate the checkout
+make check # generate, format, lint, race-test, audit, build, and validate Compose
 ```
 
 Run locally with development defaults:
@@ -242,7 +244,9 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Maintainers and integrators |
 | [Multi-mailbox access](docs/MULTI_MAILBOX.md) | Operators and administrators |
+| [User guide](docs/USER_GUIDE.md) | Mailbox users |
 | [Deployment](docs/DEPLOYMENT.md) | Operators |
+| [Safe upgrades](docs/UPGRADING.md) | Operators |
 | [Resend setup](docs/RESEND_SETUP.md) | Domain and webhook operators |
 | [Backup and restore](docs/BACKUP_AND_RESTORE.md) | Operators |
 | [Threat model](docs/THREAT_MODEL.md) | Security reviewers |
@@ -250,7 +254,9 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | [Release process](docs/RELEASES.md) | Maintainers |
 | [Repository settings](docs/REPOSITORY_SETTINGS.md) | Repository administrators |
 | [Roadmap](ROADMAP.md) | Community |
+| [Vision](VISION.md) | Users and contributors |
 | [Contributing](CONTRIBUTING.md) | Contributors |
+| [Contributors](CONTRIBUTORS.md) | Community |
 | [Governance](GOVERNANCE.md) | Maintainers and contributors |
 | [Support](SUPPORT.md) | Users and operators |
 
@@ -260,7 +266,7 @@ Litebox does not implement SMTP, IMAP, POP3, JMAP, multi-tenant SaaS isolation, 
 
 ## Community
 
-Bug reports, focused feature proposals, documentation improvements, tests, and careful security reviews are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), [GOVERNANCE.md](GOVERNANCE.md), and the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+Bug reports, focused feature proposals, documentation improvements, tests, and careful security reviews are welcome. Start with the streamlined [contribution guide](CONTRIBUTING.md), read the project [vision](VISION.md), and meet the people in [CONTRIBUTORS.md](CONTRIBUTORS.md). Participation follows [GOVERNANCE.md](GOVERNANCE.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

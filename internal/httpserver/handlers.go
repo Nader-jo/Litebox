@@ -359,14 +359,14 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
-		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent", http.StatusSeeOther)
+		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
 		return
 	}
 	if r.FormValue("intent") == "continue" {
 		http.Redirect(w, r, "/drafts/"+created.ID, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/drafts", http.StatusSeeOther)
+	http.Redirect(w, r, "/drafts?notice=draft-saved", http.StatusSeeOther)
 }
 
 func (s *Server) drafts(w http.ResponseWriter, r *http.Request) {
@@ -424,10 +424,10 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
-		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent", http.StatusSeeOther)
+		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/drafts", http.StatusSeeOther)
+	http.Redirect(w, r, "/drafts?notice=draft-saved", http.StatusSeeOther)
 }
 
 func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
@@ -456,7 +456,7 @@ func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/threads/"+threadID+"?folder=sent", http.StatusSeeOther)
+	http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
 }
 
 func (s *Server) allowSend(w http.ResponseWriter, r *http.Request) bool {
@@ -546,7 +546,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/drafts/"+draftID, http.StatusSeeOther)
+	http.Redirect(w, r, "/drafts/"+draftID+"?notice=attachment-added", http.StatusSeeOther)
 }
 
 func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +556,7 @@ func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.Delete(r.Context(), key)
-	http.Redirect(w, r, "/drafts/"+r.PathValue("draftID"), http.StatusSeeOther)
+	http.Redirect(w, r, "/drafts/"+r.PathValue("draftID")+"?notice=attachment-removed", http.StatusSeeOther)
 }
 
 func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
@@ -568,7 +568,7 @@ func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
 	for _, key := range keys {
 		_ = s.store.Delete(r.Context(), key)
 	}
-	http.Redirect(w, r, "/drafts", http.StatusSeeOther)
+	http.Redirect(w, r, "/drafts?notice=draft-discarded", http.StatusSeeOther)
 }
 
 func (s *Server) attachment(w http.ResponseWriter, r *http.Request, inline bool) {
@@ -917,7 +917,24 @@ func (s *Server) pageData(r *http.Request, title string) ui.PageData {
 	return ui.PageData{Title: title, PrimaryAddress: state.Mailbox.Address, MailboxName: state.Mailbox.DisplayName,
 		Mailbox: state.Mailbox, Mailboxes: mailboxes, Addresses: state.Mailbox.Addresses,
 		User: state.Session.User, CSRFToken: state.CSRFToken, CanManage: canManage, CanWrite: state.Mailbox.Role != "viewer",
-		CanOperateSystem: canManage && state.Mailbox.IsPrimary}
+		CanOperateSystem: canManage && state.Mailbox.IsPrimary, Notice: noticeMessage(r.URL.Query().Get("notice"))}
+}
+
+func noticeMessage(code string) string {
+	switch code {
+	case "message-queued":
+		return "Message queued for delivery"
+	case "draft-saved":
+		return "Draft saved"
+	case "attachment-added":
+		return "Attachment added"
+	case "attachment-removed":
+		return "Attachment removed"
+	case "draft-discarded":
+		return "Draft discarded"
+	default:
+		return ""
+	}
 }
 
 func (s *Server) sender(r *http.Request) (model.Address, error) {

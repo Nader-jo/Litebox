@@ -4,6 +4,34 @@ Thank you for helping make self-hosted email simpler and safer. Contributions of
 code, documentation, tests, design feedback, and reproducible bug reports are
 welcome.
 
+## First contribution in five commands
+
+```bash
+git clone https://github.com/YOUR-USER/Litebox.git
+cd Litebox
+git switch -c fix/short-description develop
+make setup
+make check
+```
+
+`make setup` downloads modules, installs pinned contributor tools, regenerates
+committed UI code, validates both Compose configurations, and runs a small
+environment smoke test. It is safe to run again.
+
+If installing Go tools locally is inconvenient, build the development image:
+
+```bash
+docker build -f Dockerfile.dev -t litebox:dev .
+docker run --rm -it -p 8080:8080 \
+  -v "$PWD:/workspace" -v litebox-go-modules:/go/pkg/mod \
+  litebox:dev
+```
+
+Open <http://localhost:8080/setup>. The development image contains the pinned
+Go and C toolchains, Make, ShellCheck, Docker CLI, templ, staticcheck, govulncheck,
+actionlint, GoReleaser, and golangci-lint. Mount the Docker socket only when you
+intentionally need container checks from inside it.
+
 ## Before you begin
 
 - Search existing issues and discussions before opening a new one.
@@ -16,8 +44,9 @@ welcome.
 ## Development workflow
 
 1. Fork the repository and create a branch from `develop`.
-2. Install the Go version declared in `go.mod` and GNU Make.
-3. Run `make bootstrap` to install the pinned development tools.
+2. Install the Go version declared in `go.mod`, Docker, and GNU Make—or use
+   `Dockerfile.dev`.
+3. Run `make setup` to prepare and validate the checkout.
 4. Make the smallest coherent change, including tests and documentation.
 5. Run `make check` before opening a pull request.
 6. Complete the pull request template and link the relevant issue.

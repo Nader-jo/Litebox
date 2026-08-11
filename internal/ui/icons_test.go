@@ -11,8 +11,8 @@ func TestTablerIconCatalogRendersEveryUsedIcon(t *testing.T) {
 	t.Parallel()
 
 	names := []string{
-		"archive", "arrow-left", "arrow-up-right", "close", "draft",
-		"health", "inbox", "mail", "menu", "paperclip", "plus", "reply",
+		"archive", "arrow-left", "arrow-up-right", "check", "close", "draft",
+		"health", "inbox", "keyboard", "logout", "mail", "menu", "paperclip", "plus", "reply",
 		"search", "send", "sessions", "settings", "star", "trash", "users",
 	}
 	for _, name := range names {

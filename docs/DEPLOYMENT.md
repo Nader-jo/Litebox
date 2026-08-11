@@ -48,7 +48,7 @@ less setup.sh
 sudo sh setup.sh
 ```
 
-Useful options are `--version 0.2.2`, `--install-dir /srv/litebox`,
+Useful options are `--version 0.3.0`, `--install-dir /srv/litebox`,
 `--no-start`, and `--reconfigure`. Run `sh setup.sh --help` for the complete
 environment-variable interface used by unattended provisioning.
 
@@ -56,6 +56,9 @@ Re-running the installer is safe: it preserves the existing `.env` file and
 advances only `LITEBOX_IMAGE` to the selected immutable release. Pass
 `--reconfigure` when managed configuration should be prompted for again. Always
 take a backup and read the release notes before an upgrade.
+
+Follow the [safe upgrade guide](UPGRADING.md) for the complete backup,
+verification, and restorative rollback procedure.
 
 ## Private local demo
 
@@ -76,7 +79,7 @@ email. The installer prints exact stop, restart, and deletion commands.
 Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
 
 ```bash
-VERSION=0.2.2 # replace with the current release
+VERSION=0.3.0 # replace with the current release
 install -d -m 0750 /opt/litebox
 cd /opt/litebox
 curl --fail --location --output litebox-vps.tar.gz \
@@ -145,7 +148,7 @@ If your platform overrides these controls, preserve write access to `/data` and 
 Inspect the published manifest before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.2
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.0
 ```
 
 The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
@@ -154,7 +157,7 @@ If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance atte
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/nader-jo/litebox:0.2.2 \
+  oci://ghcr.io/nader-jo/litebox:0.3.0 \
   --repo Nader-jo/Litebox
 ```
 
@@ -173,7 +176,7 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.2|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.0|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor

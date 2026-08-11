@@ -4,6 +4,27 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-11
+
+### Added
+
+- Add keyboard shortcuts for composing, searching, navigating folders and threads, replying, and opening an in-app shortcut reference.
+- Add clear send, save, attachment, and discard feedback with accessible status toasts and pending-action states.
+- Add an end-user guide, a data-safe upgrade guide, a project vision, and contributor recognition.
+- Add a one-command `make setup` contributor bootstrap and a pinned development container.
+- Add pinned `golangci-lint` checks locally and on every pull request.
+
+### Changed
+
+- Improve responsive mailbox, composer, search, and navigation layouts for small screens.
+- Expand release and installer bundles with user, upgrade, and backup documentation.
+- Clarify the roadmap, contribution path, support entry points, and release process.
+
+### Security
+
+- Allowlist UI notification codes instead of reflecting arbitrary query-string content.
+- Keep static analysis reproducible by pinning the Go lint toolchain used by contributors and CI.
+
 ## [0.2.2] - 2026-08-11
 
 ### Added
@@ -70,7 +91,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Nader-jo/Litebox/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...v0.2.0
