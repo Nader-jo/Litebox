@@ -25,7 +25,7 @@ templ Document(title string, body templ.Component) {
 templ Brand() {
 	<a class="brand" href="/inbox" aria-label="Litebox inbox">
 		<span class="brand-mark" aria-hidden="true">
-			<svg viewBox="0 0 32 32" role="img"><path d="M5.5 8.5h21v15h-21z"></path><path d="m6.5 10 9.5 7 9.5-7"></path></svg>
+			@Icon("mail")
 		</span>
 		<span>Litebox</span>
 	</a>
@@ -94,10 +94,10 @@ templ MailboxBody(data PageData) {
 	<body class="app-page" hx-boost="true">
 		<meta name="csrf-token" content={ data.CSRFToken }/>
 		<header class="topbar">
-			<button class="icon-button menu-button" type="button" data-sidebar-toggle aria-label="Open navigation" aria-controls="mailbox-navigation" aria-expanded="false">☰</button>
+			<button class="icon-button menu-button" type="button" data-sidebar-toggle aria-label="Open navigation" aria-controls="mailbox-navigation" aria-expanded="false">@Icon("menu")</button>
 			@Brand()
 			<form class="search" method="get" action="/search" role="search">
-				<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.2-4.2m1.2-5.3a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"></path></svg>
+				@Icon("search")
 				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail"/>
 			</form>
 			<form class="mailbox-switcher" method="post" action="/mailboxes/select">
@@ -141,27 +141,27 @@ templ MailboxBody(data PageData) {
 templ Sidebar(data PageData) {
 	<aside class="sidebar" id="mailbox-navigation" data-sidebar>
 		if data.CanWrite {
-			<a class="compose-button" href="/compose"><span aria-hidden="true">＋</span> Compose</a>
+			<a class="compose-button" href="/compose">@Icon("plus")<span>Compose</span></a>
 		} else {
 			<div class="read-only-pill">Read-only access</div>
 		}
 		<nav aria-label="Mailbox folders">
-			@NavItem("/inbox", "inbox", "Inbox", "⌂", data)
-			@NavItem("/starred", "starred", "Starred", "☆", data)
-			@NavItem("/sent", "sent", "Sent", "↗", data)
-			@NavItem("/drafts", "drafts", "Drafts", "□", data)
-			@NavItem("/archive", "archive", "Archive", "▣", data)
-			@NavItem("/trash", "trash", "Trash", "⌫", data)
+			@NavItem("/inbox", "inbox", "Inbox", "inbox", data)
+			@NavItem("/starred", "starred", "Starred", "star", data)
+			@NavItem("/sent", "sent", "Sent", "send", data)
+			@NavItem("/drafts", "drafts", "Drafts", "draft", data)
+			@NavItem("/archive", "archive", "Archive", "archive", data)
+			@NavItem("/trash", "trash", "Trash", "trash", data)
 		</nav>
 		<div class="sidebar-footer">
-			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/settings/mailboxes"><span>⚙</span> Settings</a>
+			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/settings/mailboxes">@Icon("settings")<span>Settings</span></a>
 			<div class="storage-pill"><span class="status-dot"></span> Local-first storage</div>
 		</div>
 	</aside>
 }
 
 templ NavItem(href string, key string, label string, icon string, data PageData) {
-	<a class={ "nav-item", templ.KV("active", data.CurrentFolder == key) } href={ templ.SafeURL(href) }><span aria-hidden="true">{ icon }</span>{ label }</a>
+	<a class={ "nav-item", templ.KV("active", data.CurrentFolder == key) } href={ templ.SafeURL(href) }>@Icon(icon)<span>{ label }</span></a>
 }
 
 templ MailboxWorkspace(data PageData) {
@@ -182,7 +182,7 @@ templ MailboxWorkspace(data PageData) {
 		if data.NextPageURL != "" || data.FirstPageURL != "" {
 			<nav class="pagination" aria-label="Mailbox pages">
 				if data.FirstPageURL != "" {
-					<a class="button button-ghost" href={ templ.SafeURL(data.FirstPageURL) }>← Newest</a>
+					<a class="button button-ghost" href={ templ.SafeURL(data.FirstPageURL) }>@Icon("arrow-left") Newest</a>
 				}
 				if data.NextPageURL != "" {
 					<a class="button button-secondary" href={ templ.SafeURL(data.NextPageURL) }>Older →</a>
@@ -205,7 +205,7 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 		<div class="thread-subject">
 			<span>{ displaySubject(item.Subject) }</span>
 			if item.IsStarred {
-				<span class="star" aria-label="Starred">★</span>
+				<span class="star" aria-label="Starred">@Icon("star")</span>
 			}
 		</div>
 		<p>{ item.Snippet }</p>
@@ -214,7 +214,7 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 				<span>{ fmt.Sprintf("%d messages", item.MessageCount) }</span>
 			}
 			if item.HasAttachments {
-				<span>⌕ Attachment</span>
+				<span class="meta-with-icon">@Icon("paperclip") Attachment</span>
 			}
 			if item.DeliveryStatus != "" {
 				<span class={ "delivery", templ.KV("terminal", isTerminalStatus(item.DeliveryStatus)) }>{ statusLabel(item.DeliveryStatus) }</span>
@@ -224,17 +224,17 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 }
 
 templ EmptyMailbox(folder string) {
-	<div class="empty-state"><div class="empty-icon">✉</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p><a class="button button-secondary" href="/compose">Write a message</a></div>
+	<div class="empty-state"><div class="empty-icon">@Icon("mail")</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p><a class="button button-secondary" href="/compose">Write a message</a></div>
 }
 
 templ ReaderEmpty() {
-	<div class="reader-empty"><div class="empty-icon">↗</div><h2>Select a conversation</h2><p>Your mail opens here, without leaving the page.</p></div>
+	<div class="reader-empty"><div class="empty-icon">@Icon("arrow-up-right")</div><h2>Select a conversation</h2><p>Your mail opens here, without leaving the page.</p></div>
 }
 
 templ Conversation(thread model.Thread, data PageData) {
 	<div class="conversation">
 		<div class="conversation-toolbar">
-			<a class="icon-button back-button" href={ templ.SafeURL(backURL(data)) } aria-label="Back">←</a>
+			<a class="icon-button back-button" href={ templ.SafeURL(backURL(data)) } aria-label="Back">@Icon("arrow-left")</a>
 			if data.CanWrite && thread.IsTrashed {
 				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/restore") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Restore</button></form>
 				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Delete forever</button></form>
@@ -261,7 +261,7 @@ templ Conversation(thread model.Thread, data PageData) {
 		</div>
 		if data.CanWrite {
 			<div class="reply-bar">
-				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>↩ Reply</a>
+				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") }>@Icon("reply") Reply</a>
 				<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
 			</div>
 		}
@@ -311,7 +311,7 @@ templ MessageCard(message model.Message) {
 			<div class="attachments">
 				for _, attachment := range message.Attachments {
 					if attachment.StorageStatus == "ready" {
-						<a href={ templ.SafeURL("/attachments/" + attachment.ID) }><span>⌕</span><span><strong>{ attachment.Filename }</strong><small>{ byteSize(attachment.SizeBytes) } · { attachment.ContentType }</small></span></a>
+						<a href={ templ.SafeURL("/attachments/" + attachment.ID) }><span>@Icon("paperclip")</span><span><strong>{ attachment.Filename }</strong><small>{ byteSize(attachment.SizeBytes) } · { attachment.ContentType }</small></span></a>
 					} else {
 						<div class="attachment-unavailable" role="status"><span>!</span><span><strong>{ attachment.Filename }</strong><small>Attachment archival failed; retry details are available in System.</small></span></div>
 					}
@@ -326,9 +326,9 @@ templ MessageCard(message model.Message) {
 
 templ Composer(data PageData, draft model.Draft) {
 	<section class="composer-page">
-		<div class="section-header"><div><p class="eyebrow">Draft</p><h1>New message</h1></div><a class="icon-button" href="/drafts" aria-label="Close composer">×</a></div>
+		<div class="section-header"><div><p class="eyebrow">Draft</p><h1>New message</h1></div><a class="icon-button" href="/drafts" aria-label="Close composer">@Icon("close")</a></div>
 		if draft.ID != "" {
-			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL("/drafts/" + draft.ID + "/attachments") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">⌕ Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
+			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL("/drafts/" + draft.ID + "/attachments") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">@Icon("paperclip") Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
 		}
 		<form class="composer-form" method="post" action={ templ.SafeURL(draftAction(draft.ID)) }>
 			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
@@ -348,7 +348,7 @@ templ Composer(data PageData, draft model.Draft) {
 			if len(draft.Attachments) > 0 {
 				<div class="draft-attachments">
 					for _, attachment := range draft.Attachments {
-						<span>⌕ { attachment.Filename } <small>{ byteSize(attachment.SizeBytes) }</small><button class="attachment-remove" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/attachments/" + attachment.ID + "/delete") } aria-label={ "Remove " + attachment.Filename }>×</button></span>
+						<span>@Icon("paperclip") { attachment.Filename } <small>{ byteSize(attachment.SizeBytes) }</small><button class="attachment-remove" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/attachments/" + attachment.ID + "/delete") } aria-label={ "Remove " + attachment.Filename }>@Icon("close")</button></span>
 					}
 				</div>
 			}
@@ -396,13 +396,13 @@ templ AdminPanel(data PageData) {
 
 templ SettingsNav(data PageData) {
 	<nav class="settings-nav" aria-label="Settings sections">
-		<a class={ templ.KV("active", data.SettingsSection == "mailboxes") } href="/settings/mailboxes">Mailboxes</a>
+		<a class={ templ.KV("active", data.SettingsSection == "mailboxes") } href="/settings/mailboxes">@Icon("mail") Mailboxes</a>
 		if data.CanManage {
-			<a class={ templ.KV("active", data.SettingsSection == "people") } href="/settings/people">People</a>
+			<a class={ templ.KV("active", data.SettingsSection == "people") } href="/settings/people">@Icon("users") People</a>
 		}
-		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href="/settings/sessions">Sessions</a>
+		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href="/settings/sessions">@Icon("sessions") Sessions</a>
 		if data.CanOperateSystem {
-			<a class={ templ.KV("active", data.SettingsSection == "system") } href="/admin/system">System</a>
+			<a class={ templ.KV("active", data.SettingsSection == "system") } href="/admin/system">@Icon("health") System</a>
 		}
 	</nav>
 }

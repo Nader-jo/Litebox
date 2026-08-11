@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1.12
-FROM golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc AS builder
 
 ARG VERSION=dev
 ARG COMMIT=none
 ARG BUILD_DATE=unknown
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 RUN apk add --no-cache ca-certificates git
@@ -14,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
       -trimpath \
       -buildvcs=false \
       -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
@@ -28,7 +30,10 @@ ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.title="Litebox" \
       org.opencontainers.image.description="A brutally lightweight self-hosted mailbox powered by Resend" \
+      org.opencontainers.image.url="https://github.com/Nader-jo/Litebox" \
       org.opencontainers.image.source="https://github.com/Nader-jo/Litebox" \
+      org.opencontainers.image.documentation="https://github.com/Nader-jo/Litebox/blob/develop/docs/DEPLOYMENT.md" \
+      org.opencontainers.image.vendor="Litebox contributors" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}" \

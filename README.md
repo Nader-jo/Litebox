@@ -3,6 +3,7 @@
 [![CI](https://github.com/Nader-jo/Litebox/actions/workflows/ci.yml/badge.svg)](https://github.com/Nader-jo/Litebox/actions/workflows/ci.yml)
 [![Security](https://github.com/Nader-jo/Litebox/actions/workflows/security.yml/badge.svg)](https://github.com/Nader-jo/Litebox/actions/workflows/security.yml)
 [![Release](https://img.shields.io/github/v/release/Nader-jo/Litebox)](https://github.com/Nader-jo/Litebox/releases/latest)
+[![Container](https://img.shields.io/badge/GHCR-linux%2Famd64%20%7C%20linux%2Farm64-006bff)](https://github.com/Nader-jo/Litebox/pkgs/container/litebox)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Nader-jo/Litebox/badge)](https://scorecard.dev/viewer/?uri=github.com/Nader-jo/Litebox)
 [![Go Report Card](https://goreportcard.com/badge/github.com/Nader-jo/Litebox)](https://goreportcard.com/report/github.com/Nader-jo/Litebox)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -27,6 +28,7 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - full-text search with useful operators;
 - first-run setup, Argon2id passwords, hashed sessions, CSRF protection, and login throttling;
 - independent mailboxes, shared aliases, per-mailbox roles, mailbox switching, and revocable device sessions;
+- one signed GHCR image tag that runs on Linux AMD64 and ARM64 VPS hosts;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
 
@@ -66,13 +68,24 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 - a Resend API key and webhook signing secret;
 - a public HTTPS hostname for webhook delivery.
 
-### 1. Configure
+### 1. Download a release bundle
 
 ```bash
-git clone https://github.com/Nader-jo/Litebox.git
-cd Litebox
+VERSION=0.2.0 # replace with the current release
+install -d -m 0750 /opt/litebox
+cd /opt/litebox
+curl --fail --location --output litebox-vps.tar.gz \
+  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz"
+tar -xzf litebox-vps.tar.gz
 cp .env.example .env
+chmod 0600 .env
 ```
+
+Release bundles contain Compose, the optional Caddy configuration, operator documentation, licenses, and an `.env.example` already pinned to the matching immutable image tag. A source checkout is not required on the VPS. Docker selects `linux/amd64` on x86-64 hosts and `linux/arm64` on 64-bit ARM hosts from the same tag.
+
+To build from source for development instead, follow the [Development guide](docs/DEVELOPMENT.md) and use `compose.build.yaml`.
+
+### 2. Configure
 
 Edit `.env` and set at least:
 
@@ -90,12 +103,15 @@ Keep `.env` private. It is ignored by Git.
 
 `MAILBOX_PRIMARY_ADDRESS` bootstraps the first mailbox. Every address in `MAILBOX_ALLOWED_RECIPIENTS` is idempotently registered as an alias for that mailbox at startup. After setup, owners and administrators can create independent mailboxes and manage aliases from **Settings → Mailboxes**; database-managed addresses do not need to be duplicated in the environment.
 
-### 2. Start
+### 3. Pull and start
 
 If you already operate a reverse proxy:
 
 ```bash
+docker compose config --quiet
+docker compose pull mailbox
 docker compose up -d
+docker compose ps
 ```
 
 Litebox listens on `127.0.0.1:8080` by default. Route public HTTPS traffic to it.
@@ -106,7 +122,7 @@ If you want the supplied Caddy profile:
 docker compose --profile proxy up -d
 ```
 
-### 3. Create the administrator
+### 4. Create the administrator
 
 Open `https://mail.example.com/setup` once. The first administrator becomes owner of the primary mailbox, and unauthenticated setup is then permanently disabled. Add more people and assign per-mailbox roles from **Settings → People**.
 
@@ -118,7 +134,7 @@ docker compose exec mailbox /app/litebox create-admin \
   --name "Mailbox Owner"
 ```
 
-### 4. Connect Resend
+### 5. Connect Resend
 
 In Resend:
 
@@ -131,6 +147,8 @@ In Resend:
 See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict warning.
 
 ## Operations
+
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.0`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 
@@ -264,4 +282,4 @@ Bug reports, focused feature proposals, documentation improvements, tests, and c
 
 ## License
 
-Litebox is licensed under the [Apache License 2.0](LICENSE). Vendored HTMX remains under its BSD 2-Clause license; see [NOTICE](NOTICE).
+Litebox is licensed under the [Apache License 2.0](LICENSE). Vendored HTMX remains under its BSD 2-Clause license, and selected Tabler Icons v3.46.0 paths remain under MIT; see [NOTICE](NOTICE).

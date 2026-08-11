@@ -26,6 +26,15 @@ APP_ENV=development go run ./cmd/mailbox serve
 
 Open <http://localhost:8080/setup>.
 
+To exercise the complete container locally from source:
+
+```bash
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
+make container-smoke
+```
+
+Production Compose intentionally has no `build` section; it consumes the published multi-platform image.
+
 ## Generated UI
 
 Edit `internal/ui/*.templ`, never `*_templ.go` directly.
@@ -36,6 +45,16 @@ git diff --check
 ```
 
 Generated files are committed. CI regenerates them and rejects drift. Browser assets are embedded from `web/static`.
+
+## Interface icons
+
+Interface icons use the exact outline paths from [Tabler Icons](https://tabler.io/icons), currently pinned to v3.46.0. Do not freehand replacement SVG paths. When adding an icon:
+
+1. choose an existing Tabler outline icon on its 24×24 grid;
+2. copy the upstream path data verbatim into `internal/ui/icons.templ`;
+3. add the icon name to `internal/ui/icons_test.go`;
+4. update the pinned version and MIT notice if the upstream version changes;
+5. regenerate templ output and visually verify desktop and mobile rendering.
 
 ## Package rules
 
@@ -57,7 +76,10 @@ make lint
 make workflow-lint
 make release-check
 make vuln
+make container-smoke
 ```
+
+CI builds and health-checks both `linux/amd64` and `linux/arm64`. The release workflow repeats those checks against the published digest before making the draft GitHub release public.
 
 The required high-risk suites cover:
 

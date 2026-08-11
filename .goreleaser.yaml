@@ -65,3 +65,8 @@ changelog:
 release:
   prerelease: auto
   mode: replace
+  draft: true
+  replace_existing_draft: true
+  extra_files:
+    - glob: ./release/*.tar.gz
+    - glob: ./release/*.sha256

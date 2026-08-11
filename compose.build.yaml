@@ -1,0 +1,10 @@
+services:
+  mailbox:
+    image: litebox:local
+    pull_policy: build
+    build:
+      context: .
+      args:
+        VERSION: ${LITEBOX_VERSION:-dev}
+        COMMIT: ${LITEBOX_COMMIT:-none}
+        BUILD_DATE: ${LITEBOX_BUILD_DATE:-unknown}

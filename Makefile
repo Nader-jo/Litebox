@@ -5,7 +5,7 @@ GOVULNCHECK_VERSION := v1.6.0
 ACTIONLINT_VERSION := v1.7.12
 GORELEASER_VERSION := v2.17.1
 
-.PHONY: help bootstrap generate generated-check fmt fmt-check lint workflow-lint release-check test test-race build run doctor vuln compose-up compose-down compose-config check clean
+.PHONY: help bootstrap generate generated-check fmt fmt-check lint workflow-lint release-check test test-race build run doctor vuln container-smoke compose-up compose-down compose-pull compose-config check clean
 
 help:
 	@echo "Litebox development targets"
@@ -23,7 +23,9 @@ help:
 	@echo "  run            start the local server"
 	@echo "  doctor         verify local data integrity"
 	@echo "  vuln           scan dependencies for known vulnerabilities"
-	@echo "  compose-up     start the one-container stack"
+	@echo "  container-smoke build and health-check the local container"
+	@echo "  compose-up     build source and start the local Compose stack"
+	@echo "  compose-pull   pull the published multi-platform image"
 	@echo "  check          run release-grade local verification"
 
 bootstrap:
@@ -72,14 +74,22 @@ doctor:
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
+container-smoke:
+	docker build -t litebox:smoke .
+	bash scripts/smoke-container.sh litebox:smoke
+
 compose-up:
-	docker compose up -d --build
+	docker compose -f compose.yaml -f compose.build.yaml up -d --build
 
 compose-down:
-	docker compose down
+	docker compose -f compose.yaml -f compose.build.yaml down
+
+compose-pull:
+	docker compose pull mailbox
 
 compose-config:
 	docker compose config --quiet
+	docker compose -f compose.yaml -f compose.build.yaml config --quiet
 
 check: generated-check fmt-check lint workflow-lint release-check test-race vuln build compose-config
 

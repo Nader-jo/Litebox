@@ -3,12 +3,6 @@ name: litebox
 services:
   mailbox:
     image: ${LITEBOX_IMAGE:-ghcr.io/nader-jo/litebox:latest}
-    build:
-      context: .
-      args:
-        VERSION: ${LITEBOX_VERSION:-dev}
-        COMMIT: ${LITEBOX_COMMIT:-none}
-        BUILD_DATE: ${LITEBOX_BUILD_DATE:-unknown}
     restart: unless-stopped
     init: true
     env_file:

@@ -5,6 +5,7 @@
 data
 bin
 dist
+release
 coverage
 *.db
 *.db-shm

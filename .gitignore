@@ -6,6 +6,7 @@
 # Build and test output
 /bin/
 /dist/
+/release/
 /coverage/
 coverage.out
 *.test

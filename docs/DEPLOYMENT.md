@@ -2,6 +2,13 @@
 
 This guide assumes a small Linux VPS, Docker Engine, and a domain already controlled by the operator.
 
+Litebox publishes one OCI image index per release at `ghcr.io/nader-jo/litebox`. The supported platforms are:
+
+- `linux/amd64` for Intel and AMD x86-64 VPS instances;
+- `linux/arm64` for 64-bit ARM hosts such as Ampere instances and Raspberry Pi-class servers.
+
+Docker automatically selects the matching image from a version tag. Thirty-two-bit ARM is not supported.
+
 ## Minimum resources
 
 - 1 vCPU;
@@ -12,7 +19,23 @@ This guide assumes a small Linux VPS, Docker Engine, and a domain already contro
 
 ## Prepare configuration
 
-Copy `.env.example` to `.env`, restrict it to the deployment account, and set production values. `APP_BASE_URL` must be HTTPS. `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` are mandatory in production.
+Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
+
+```bash
+VERSION=0.2.0 # replace with the current release
+install -d -m 0750 /opt/litebox
+cd /opt/litebox
+curl --fail --location --output litebox-vps.tar.gz \
+  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz"
+curl --fail --location --output litebox-vps.tar.gz.sha256 \
+  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz.sha256"
+sha256sum --check litebox-vps.tar.gz.sha256
+tar -xzf litebox-vps.tar.gz
+cp .env.example .env
+chmod 0600 .env
+```
+
+The bundled `.env.example` pins `LITEBOX_IMAGE` to the same complete release version. Set production values in `.env`. `APP_BASE_URL` must be HTTPS. `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` are mandatory in production.
 
 Do not place secrets in `compose.yaml`, shell history, image build arguments, GitHub issues, or logs.
 
@@ -35,6 +58,8 @@ docker compose ps
 docker compose logs --tail=100 mailbox
 curl --fail http://127.0.0.1:8080/health/ready
 ```
+
+The production `compose.yaml` is image-only. It never builds application source on the VPS. Maintainers and contributors who need a local source build use the separate `compose.build.yaml` override.
 
 ## Supplied Caddy profile
 
@@ -61,11 +86,31 @@ The supplied image and Compose definition:
 
 If your platform overrides these controls, preserve write access to `/data` and `/tmp` while keeping `/data/objects` private.
 
+## Verify image platform and provenance
+
+Inspect the published manifest before deployment:
+
+```bash
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.0
+```
+
+The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
+
+If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance attestation:
+
+```bash
+gh attestation verify \
+  oci://ghcr.io/nader-jo/litebox:0.2.0 \
+  --repo Nader-jo/Litebox
+```
+
+For strict change control, resolve the version tag to its OCI digest after testing and pin `LITEBOX_IMAGE` as `ghcr.io/nader-jo/litebox@sha256:...`.
+
 ## Upgrade
 
 1. Read the release notes and backup the current installation.
 2. Stop the mailbox for a supported quiesced backup.
-3. Pull the new immutable version tag; avoid `latest` for production pinning.
+3. Download the new release bundle and pull its immutable image tag; avoid `latest` for production pinning.
 4. Start Litebox. Migrations are embedded, ordered, and transactional.
 5. Run `litebox doctor` and inspect `/admin/system`.
 
@@ -74,8 +119,9 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.0 docker compose pull mailbox
-LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.0 docker compose up -d mailbox
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.0|' .env
+docker compose pull mailbox
+docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor
 ```
 

@@ -53,26 +53,46 @@ jobs:
           if-no-files-found: error
 
   container:
-    name: Container and Compose
+    name: Container (${{ matrix.platform }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            id: amd64
+          - platform: linux/arm64
+            id: arm64
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - name: Set up Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
       - name: Validate Compose
-        run: docker compose config --quiet
-      - name: Build container
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.build.yaml config --quiet
+      - name: Build platform image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
+          platforms: ${{ matrix.platform }}
+          load: true
           push: false
-          tags: litebox:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: litebox:ci-${{ matrix.id }}
+          build-args: |
+            VERSION=ci
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=unknown
+          cache-from: type=gha,scope=container-${{ matrix.id }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.id }}
+      - name: Smoke-test hardened container
+        run: bash scripts/smoke-container.sh "litebox:ci-${{ matrix.id }}" "${{ matrix.platform }}"
 
   configuration:
     name: Repository configuration

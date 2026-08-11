@@ -10,8 +10,12 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 - [x] inbox, conversations, drafts, compose, reply, folders, and search;
 - [x] outbound idempotency and delivery-state reconciliation;
 - [x] diagnostics, backup, restore, doctor, CI, releases, and security policy;
+
+## 0.2 — Multi-mailbox VPS release
+
 - [x] multiple independent mailboxes and aliases;
 - [x] multiple users, per-mailbox roles, mailbox switching, and session management;
+- [x] signed Linux amd64/arm64 images and version-pinned VPS release bundles;
 - [ ] wider real-provider acceptance testing and accessibility audit;
 - [ ] performance measurements at 100,000 messages.
 
