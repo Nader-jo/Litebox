@@ -17,12 +17,66 @@ Docker automatically selects the matching image from a version tag. Thirty-two-b
 - independent backups of the persistent dataset;
 - public HTTPS ingress able to reach `/webhooks/resend`.
 
-## Prepare configuration
+## Guided installation
+
+On a fresh VPS, run the release-attached installer:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
+  sudo sh
+```
+
+The script:
+
+1. verifies a supported 64-bit AMD/Intel or ARM host and Docker Compose v2;
+2. resolves the latest stable release unless a version is pinned;
+3. downloads the VPS bundle and verifies its attached SHA-256 checksum;
+4. prompts on the controlling terminal, with echo disabled for secrets;
+5. writes a mode-`0600` environment file, validates Compose, and starts the services;
+6. waits for Litebox to become healthy and prints the setup and Resend URLs.
+
+To inspect and verify the script before execution:
+
+```bash
+curl --fail --location --remote-name \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh
+curl --fail --location --remote-name \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh.sha256
+sha256sum --check setup.sh.sha256
+less setup.sh
+sudo sh setup.sh
+```
+
+Useful options are `--version 0.2.2`, `--install-dir /srv/litebox`,
+`--no-start`, and `--reconfigure`. Run `sh setup.sh --help` for the complete
+environment-variable interface used by unattended provisioning.
+
+Re-running the installer is safe: it preserves the existing `.env` file and
+advances only `LITEBOX_IMAGE` to the selected immutable release. Pass
+`--reconfigure` when managed configuration should be prompted for again. Always
+take a backup and read the release notes before an upgrade.
+
+## Private local demo
+
+Anyone with Docker can explore the UI without a domain or provider credentials:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
+  sh -s -- --demo
+```
+
+The demo binds only to `127.0.0.1:8080`, uses the hardened production image,
+and persists in the `litebox-demo-data` volume. It cannot send or receive real
+email. The installer prints exact stop, restart, and deletion commands.
+
+## Manual installation
 
 Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
 
 ```bash
-VERSION=0.2.1 # replace with the current release
+VERSION=0.2.2 # replace with the current release
 install -d -m 0750 /opt/litebox
 cd /opt/litebox
 curl --fail --location --output litebox-vps.tar.gz \
@@ -91,7 +145,7 @@ If your platform overrides these controls, preserve write access to `/data` and 
 Inspect the published manifest before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.1
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.2
 ```
 
 The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
@@ -100,7 +154,7 @@ If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance atte
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/nader-jo/litebox:0.2.1 \
+  oci://ghcr.io/nader-jo/litebox:0.2.2 \
   --repo Nader-jo/Litebox
 ```
 
@@ -119,7 +173,7 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.1|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.2.2|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor

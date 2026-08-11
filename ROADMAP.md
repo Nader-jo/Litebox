@@ -16,6 +16,7 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 - [x] multiple independent mailboxes and aliases;
 - [x] multiple users, per-mailbox roles, mailbox switching, and session management;
 - [x] signed Linux amd64/arm64 images and version-pinned VPS release bundles;
+- [x] checksum-verified guided installer and private one-command demo;
 - [ ] wider real-provider acceptance testing and accessibility audit;
 - [ ] performance measurements at 100,000 messages.
 

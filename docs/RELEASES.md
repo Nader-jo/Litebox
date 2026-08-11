@@ -12,7 +12,8 @@ Pushing a signed `v*` tag runs `.github/workflows/release.yml` after tests. The 
 - signed GitHub/Sigstore provenance attestations for archives, checksums, and SBOMs;
 - a generated GitHub release/changelog;
 - a multi-platform GHCR image for Linux amd64/arm64;
-- a version-pinned VPS bundle containing Compose, Caddy, `.env.example`, deployment documentation, and licenses;
+- a checksum-pinned `setup.sh` release asset for guided installation and private demo mode;
+- a version-pinned VPS bundle containing the installer, Compose, Caddy, `.env.example`, deployment documentation, and licenses;
 - OCI metadata, BuildKit provenance, an image SBOM, and GitHub/Sigstore image provenance.
 
 GoReleaser creates the GitHub release as a draft. The workflow publishes that draft only after the GHCR manifest contains both supported platforms and both published images pass the hardened health smoke test. A container failure therefore cannot advertise a completed GitHub release.
@@ -23,27 +24,27 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 
 1. Ensure `develop` is green and the working tree is clean.
 2. Review dependency and vulnerability reports.
-3. Run `make check`.
+3. Run `make check`, including the isolated onboarding installer fixture.
 4. Build and smoke-test the container as a non-root user on both Linux amd64 and arm64.
 5. Perform a backup/restore drill for schema or storage changes.
 6. Update `CHANGELOG.md`, migration notes, docs, and supported-version policy.
 7. Choose the SemVer version and create an annotated, preferably signed, tag from a commit contained in `develop`.
 8. Push the tag and watch the release workflow.
-9. Verify checksums, archives, the VPS bundle, SBOMs, GHCR platforms, OCI labels, attestations, and release notes.
+9. Verify checksums, archives, the executable installer asset, the VPS bundle, SBOMs, GHCR platforms, OCI labels, attestations, and release notes.
 10. Deploy the exact version tag to a test installation and run `litebox doctor --deep`.
 11. Announce material security or migration notes clearly.
 
 Consumers can verify a downloaded archive with GitHub CLI:
 
 ```bash
-gh attestation verify litebox_0.2.1_linux_amd64.tar.gz --repo Nader-jo/Litebox
+gh attestation verify litebox_0.2.2_linux_amd64.tar.gz --repo Nader-jo/Litebox
 ```
 
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.2.1 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.1
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.2.2 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.2.2
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -53,8 +54,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.2.1 -m "Litebox v0.2.1"
-git push origin v0.2.1
+git tag -s v0.2.2 -m "Litebox v0.2.2"
+git push origin v0.2.2
 ```
 
 ## Release failure

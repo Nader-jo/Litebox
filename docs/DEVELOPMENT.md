@@ -75,9 +75,15 @@ make test-race
 make lint
 make workflow-lint
 make release-check
+make onboarding-check
 make vuln
 make container-smoke
 ```
+
+`make onboarding-check` runs POSIX syntax checks, pinned ShellCheck v0.11.0,
+and an isolated fixture that verifies download checksum handling, secret-safe
+configuration, Compose validation, and idempotent upgrades. It does not contact
+GitHub or start a real Litebox container.
 
 CI builds and health-checks both `linux/amd64` and `linux/arm64`. The release workflow repeats those checks against the published digest before making the draft GitHub release public.
 

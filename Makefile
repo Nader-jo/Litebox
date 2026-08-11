@@ -4,8 +4,9 @@ STATICCHECK_VERSION := v0.7.0
 GOVULNCHECK_VERSION := v1.6.0
 ACTIONLINT_VERSION := v1.7.12
 GORELEASER_VERSION := v2.17.1
+SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
 
-.PHONY: help bootstrap generate generated-check fmt fmt-check lint workflow-lint release-check test test-race build run doctor vuln container-smoke compose-up compose-down compose-pull compose-config check clean
+.PHONY: help bootstrap generate generated-check fmt fmt-check lint workflow-lint release-check onboarding-check test test-race build run doctor vuln container-smoke compose-up compose-down compose-pull compose-config check clean
 
 help:
 	@echo "Litebox development targets"
@@ -17,6 +18,7 @@ help:
 	@echo "  lint           run go vet and staticcheck"
 	@echo "  workflow-lint  validate GitHub Actions workflow syntax"
 	@echo "  release-check  validate the GoReleaser configuration"
+	@echo "  onboarding-check validate and test the guided setup script"
 	@echo "  test           run the complete test suite"
 	@echo "  test-race      run tests with the race detector"
 	@echo "  build          build bin/litebox"
@@ -56,6 +58,12 @@ workflow-lint:
 release-check:
 	$(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) check
 
+onboarding-check:
+	sh -n setup.sh
+	sh -n scripts/test-setup.sh
+	docker run --rm -v "$(CURDIR):/mnt:ro" $(SHELLCHECK_IMAGE) -x /mnt/setup.sh /mnt/scripts/test-setup.sh
+	sh scripts/test-setup.sh
+
 test: generate
 	$(GO) test -cover ./...
 
@@ -91,7 +99,7 @@ compose-config:
 	docker compose config --quiet
 	docker compose -f compose.yaml -f compose.build.yaml config --quiet
 
-check: generated-check fmt-check lint workflow-lint release-check test-race vuln build compose-config
+check: generated-check fmt-check lint workflow-lint release-check onboarding-check test-race vuln build compose-config
 
 clean:
 	$(GO) clean

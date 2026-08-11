@@ -66,14 +66,16 @@ jobs:
           source_date_epoch="$(git show -s --format=%ct HEAD)"
           staging="$(mktemp -d)"
           trap 'rm -rf "$staging"' EXIT
-          cp compose.yaml Caddyfile .env.example LICENSE NOTICE "$staging/"
+          cp compose.yaml Caddyfile .env.example LICENSE NOTICE setup.sh "$staging/"
           cp docs/DEPLOYMENT.md "$staging/DEPLOYMENT.md"
           sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${version}|" "$staging/.env.example"
           mkdir -p release
           bundle="litebox_${version}_vps.tar.gz"
           tar --sort=name --mtime="@${source_date_epoch}" --owner=0 --group=0 --numeric-owner \
             -czf "release/${bundle}" -C "$staging" .
+          install -m 0755 setup.sh release/setup.sh
           (cd release && sha256sum "$bundle" > "${bundle}.sha256")
+          (cd release && sha256sum setup.sh > setup.sh.sha256)
       - name: Create draft release with binaries, checksums, SBOMs, and VPS bundle
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
         with:
@@ -92,6 +94,7 @@ jobs:
             dist/checksums.txt
             release/*.tar.gz
             release/*.sha256
+            release/setup.sh
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - name: Set up Buildx

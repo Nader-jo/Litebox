@@ -34,6 +34,21 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 
 Litebox is a mailbox, not a mail server and not a Gmail clone.
 
+## Try it now
+
+Start a private local demo with one command. It needs only Docker, binds to
+`127.0.0.1`, and does not require a domain or Resend account:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
+  sh -s -- --demo
+```
+
+Open <http://localhost:8080/setup>. Demo data remains in the
+`litebox-demo-data` Docker volume until you delete it. Real email receiving and
+sending are disabled in demo mode.
+
 ## Architecture
 
 ```mermaid
@@ -68,61 +83,28 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 - a Resend API key and webhook signing secret;
 - a public HTTPS hostname for webhook delivery.
 
-### 1. Download a release bundle
+### 1. Run the guided installer
 
 ```bash
-VERSION=0.2.1 # replace with the current release
-install -d -m 0750 /opt/litebox
-cd /opt/litebox
-curl --fail --location --output litebox-vps.tar.gz \
-  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz"
-tar -xzf litebox-vps.tar.gz
-cp .env.example .env
-chmod 0600 .env
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
+  sudo sh
 ```
 
-Release bundles contain Compose, the optional Caddy configuration, operator documentation, licenses, and an `.env.example` already pinned to the matching immutable image tag. A source checkout is not required on the VPS. Docker selects `linux/amd64` on x86-64 hosts and `linux/arm64` on 64-bit ARM hosts from the same tag.
+The installer checks the host architecture and Docker, downloads the latest
+stable VPS bundle, verifies its SHA-256 checksum, prompts for configuration
+without echoing secrets, starts Litebox, and prints the first-login and webhook
+URLs. It installs to `/opt/litebox` by default and Docker automatically selects
+the `linux/amd64` or `linux/arm64` image from the immutable release tag.
+
+Prefer to inspect scripts before running them? Download and verify the attached
+`setup.sh` and `setup.sh.sha256`, review the script, then run `sudo sh setup.sh`.
+The [deployment guide](docs/DEPLOYMENT.md) also documents every flag,
+non-interactive automation, and the fully manual path.
 
 To build from source for development instead, follow the [Development guide](docs/DEVELOPMENT.md) and use `compose.build.yaml`.
 
-### 2. Configure
-
-Edit `.env` and set at least:
-
-```dotenv
-APP_BASE_URL=https://mail.example.com
-MAILBOX_PRIMARY_ADDRESS=hello@example.com
-MAILBOX_DISPLAY_NAME=Example Company
-MAILBOX_ALLOWED_RECIPIENTS=hello@example.com
-RESEND_API_KEY=re_...
-RESEND_WEBHOOK_SECRET=whsec_...
-LITEBOX_HOST=mail.example.com
-```
-
-Keep `.env` private. It is ignored by Git.
-
-`MAILBOX_PRIMARY_ADDRESS` bootstraps the first mailbox. Every address in `MAILBOX_ALLOWED_RECIPIENTS` is idempotently registered as an alias for that mailbox at startup. After setup, owners and administrators can create independent mailboxes and manage aliases from **Settings → Mailboxes**; database-managed addresses do not need to be duplicated in the environment.
-
-### 3. Pull and start
-
-If you already operate a reverse proxy:
-
-```bash
-docker compose config --quiet
-docker compose pull mailbox
-docker compose up -d
-docker compose ps
-```
-
-Litebox listens on `127.0.0.1:8080` by default. Route public HTTPS traffic to it.
-
-If you want the supplied Caddy profile:
-
-```bash
-docker compose --profile proxy up -d
-```
-
-### 4. Create the administrator
+### 2. Create the administrator
 
 Open `https://mail.example.com/setup` once. The first administrator becomes owner of the primary mailbox, and unauthenticated setup is then permanently disabled. Add more people and assign per-mailbox roles from **Settings → People**.
 
@@ -134,7 +116,7 @@ docker compose exec mailbox /app/litebox create-admin \
   --name "Mailbox Owner"
 ```
 
-### 5. Connect Resend
+### 3. Connect Resend
 
 In Resend:
 
@@ -148,7 +130,7 @@ See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict war
 
 ## Operations
 
-Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.1`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.2.2`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 

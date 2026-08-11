@@ -70,3 +70,4 @@ release:
   extra_files:
     - glob: ./release/*.tar.gz
     - glob: ./release/*.sha256
+    - glob: ./release/setup.sh

@@ -4,6 +4,23 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-11
+
+### Added
+
+- Add a single guided `setup.sh` for architecture checks, verified release download, secret-safe configuration, startup, and first-login guidance.
+- Add a private `--demo` mode that runs locally with Docker and requires neither a domain nor Resend credentials.
+- Publish the installer and its SHA-256 checksum as release assets and include the installer in every VPS bundle.
+
+### Changed
+
+- Replace the multi-step quick start with one command while retaining documented review-first and fully manual installation paths.
+- Preserve existing environment configuration when the installer is re-run, updating only the immutable image version unless `--reconfigure` is requested.
+
+### Security
+
+- Validate release bundle paths and checksums before extraction, keep secret prompts out of terminal echo, and enforce installer lint and fixture tests in CI.
+
 ## [0.2.1] - 2026-08-11
 
 ### Fixed
@@ -53,7 +70,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Nader-jo/Litebox/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Nader-jo/Litebox/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Nader-jo/Litebox/releases/tag/v0.1.0
