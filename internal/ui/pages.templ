@@ -68,13 +68,17 @@ templ SetupBody(data PageData) {
 			@Brand()
 			<div class="auth-copy">
 				<p class="eyebrow">First-run setup</p>
-				<h1>Create your administrator</h1>
-				<p>This first account owns the primary mailbox. You can add people and mailboxes later.</p>
+				<h1>Set up your mailbox</h1>
+				<p>Choose the mailbox identity, connect Resend, and create the first administrator. You can add people and aliases later.</p>
 			</div>
 			if data.Error != "" {
 				<div class="alert alert-error" role="alert">{ data.Error }</div>
 			}
 			<form method="post" action="/setup" class="stack">
+				<input type="hidden" name="token" value={ data.SetupToken }/>
+				<div class="field-grid"><label>Mailbox address<input name="primary_address" type="email" value={ data.PrimaryAddress } autocomplete="email" required/><small>Inbound mail is routed to this address and its aliases.</small></label><label>Mailbox name<input name="mailbox_display_name" type="text" value={ data.SetupMailboxName } autocomplete="organization" required/></label></div>
+				<div class="field-grid"><label>Public URL<input name="base_url" type="url" value={ data.SetupBaseURL } placeholder="https://mail.example.com" required/><small>Used for secure session cookies and links.</small></label><label>Resend domain ID<input name="resend_domain_id" type="text" value={ data.SetupDomainID } placeholder="Optional"/></label></div>
+				<div class="field-grid"><label>Resend API key<input name="resend_api_key" type="password" value={ data.SetupAPIKey } autocomplete="off" placeholder="re_…"/><small>Stored encrypted in SQLite.</small></label><label>Resend webhook secret<input name="resend_webhook_secret" type="password" value={ data.SetupWebhook } autocomplete="off" placeholder="whsec_…"/></label></div>
 				<label>Administrator email<input name="email" type="email" autocomplete="username" required autofocus/></label>
 				<label>Display name<input name="display_name" type="text" autocomplete="name" required/></label>
 				<div class="field-grid">
@@ -294,6 +298,9 @@ templ MessageCard(message model.Message) {
 					}
 				</strong>
 				<small>{ message.From.Address }</small>
+				if message.AliasAddress != "" {
+					<span class="alias-pill" style={ "background-color: " + message.AliasColor }>@Icon("mail") { message.AliasAddress }</span>
+				}
 			</div>
 			<div class="message-time">
 				<time datetime={ message.OccurredAt.Format(time.RFC3339) }>{ fullTime(message.OccurredAt) }</time>
@@ -420,6 +427,8 @@ templ AdminPanel(data PageData) {
 			@PeopleSettings(data)
 		} else if data.SettingsSection == "sessions" {
 			@SessionSettings(data)
+		} else if data.SettingsSection == "digest" {
+			@DigestSettings(data)
 		} else {
 			@SystemSettings(data)
 		}
@@ -433,10 +442,33 @@ templ SettingsNav(data PageData) {
 			<a class={ templ.KV("active", data.SettingsSection == "people") } href="/settings/people">@Icon("users") People</a>
 		}
 		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href="/settings/sessions">@Icon("sessions") Sessions</a>
+		<a class={ templ.KV("active", data.SettingsSection == "digest") } href="/settings/digest">@Icon("mail") Summary</a>
 		if data.CanOperateSystem {
 			<a class={ templ.KV("active", data.SettingsSection == "system") } href="/admin/system">@Icon("health") System</a>
 		}
 	</nav>
+}
+
+templ DigestSettings(data PageData) {
+	<div class="admin-section">
+		<h2>Private email summary</h2>
+		<p class="section-copy">Receive a small metadata-only report with received, unread, and sent counts. Message subjects and bodies are never included.</p>
+		<form class="settings-form" method="post" action="/settings/digest">
+			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+			<label>Send summary to<input name="recipient_email" type="email" value={ data.Digest.RecipientEmail } placeholder={ data.User.Email } required/></label>
+			<label>Frequency<select name="frequency"><option value="daily" selected?={ data.Digest.Frequency == "" || data.Digest.Frequency == "daily" }>Daily</option><option value="weekly" selected?={ data.Digest.Frequency == "weekly" }>Weekly (Monday)</option></select></label>
+			<label>Time zone<input name="timezone" value={ data.Digest.Timezone } placeholder="UTC" required/></label>
+			<label>Send at (local hour)<input name="send_hour" type="number" min="0" max="23" value={ fmt.Sprintf("%d", digestHour(data.Digest)) }/></label>
+			<label>Mailboxes<select name="mailbox_scope"><option value="all" selected?={ data.Digest.MailboxScope == "" || data.Digest.MailboxScope == "all" }>All accessible mailboxes</option><option value="selected" selected?={ data.Digest.MailboxScope == "selected" }>Selected mailboxes</option></select></label>
+			<div class="digest-mailboxes">
+				for _, mailbox := range data.DigestMailboxes {
+					<label><input type="checkbox" name="mailbox_ids" value={ mailbox.ID } checked?={ contains(data.Digest.MailboxIDs, mailbox.ID) }/> { mailbox.Address }</label>
+				}
+			</div>
+			<label class="checkbox-label"><input type="checkbox" name="enabled" checked?={ data.Digest.ID == "" || data.Digest.Enabled }/> Enable summary</label>
+			<button class="button button-primary" type="submit">Save summary schedule</button>
+		</form>
+	</div>
 }
 
 templ MailboxSettings(data PageData) {
@@ -454,14 +486,21 @@ templ MailboxSettings(data PageData) {
 		<div class="address-list">
 			for _, address := range data.Addresses {
 				<div>
-					<span><strong>{ address.Address }</strong>
+					<span class="address-identity"><span class="alias-color-dot" style={ "background-color: " + address.Color } aria-hidden="true"></span><strong>{ address.Address }</strong>
 						if address.IsPrimary {
 							<small class="badge">Primary</small>
 						}
 						<small>{ address.DisplayName }</small>
 					</span>
-					if data.CanManage && !address.IsPrimary {
-						<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this alias? New mail to it will no longer be accepted.">Remove</button></form>
+					if data.CanManage {
+						<form class="alias-color-form" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/color") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label><span class="sr-only">Color for { address.Address }</span><select name="color" aria-label={ "Color for " + address.Address } style={ "background-color: " + address.Color } data-auto-submit>
+							for _, color := range aliasPalette() {
+								<option value={ color } style={ "background-color: " + color } selected?={ color == address.Color }>{ color }</option>
+							}
+						</select></label></form>
+						if !address.IsPrimary {
+							<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this alias? New mail to it will no longer be accepted.">Remove</button></form>
+						}
 					}
 				</div>
 			}
@@ -529,6 +568,18 @@ templ SessionSettings(data PageData) {
 }
 
 templ SystemSettings(data PageData) {
+	<div class="admin-section">
+		<h2>Installation settings</h2><p class="section-copy">These values are stored in SQLite. Provider credentials are encrypted with the instance master key and never shown after saving.</p>
+		<form class="settings-form" method="post" action="/settings/system"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+			<label>Public URL<input name="base_url" type="url" value={ data.RuntimeBaseURL } required/></label>
+			<label>Session lifetime (hours)<input name="session_ttl_hours" type="number" min="1" max="8760" value={ fmt.Sprintf("%d", data.RuntimeSessionTTL) } required/></label>
+			<label>Log level<select name="log_level"><option value="debug" selected?={ data.RuntimeLogLevel == "debug" }>Debug</option><option value="info" selected?={ data.RuntimeLogLevel == "" || data.RuntimeLogLevel == "info" }>Info</option><option value="warn" selected?={ data.RuntimeLogLevel == "warn" }>Warn</option><option value="error" selected?={ data.RuntimeLogLevel == "error" }>Error</option></select></label>
+			<label>Resend API key<input name="resend_api_key" type="password" autocomplete="off" placeholder="Leave blank to keep current"/></label>
+			<label>Resend webhook secret<input name="resend_webhook_secret" type="password" autocomplete="off" placeholder="Leave blank to keep current"/></label>
+			<label>Resend domain ID<input name="resend_domain_id" type="text" placeholder="Leave blank to keep current"/></label>
+			<button class="button button-primary" type="submit">Save installation settings</button>
+		</form>
+	</div>
 	<div class="section-header compact-header"><div><h2>System health</h2></div><span class={ "health-badge", templ.KV("attention", systemHealth(data) != "Healthy") }>{ systemHealth(data) }</span></div>
 		<div class="stat-grid"><div><small>Pending jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.PendingJobs) }</strong></div><div><small>Dead jobs</small><strong>{ fmt.Sprintf("%d", data.Stats.DeadJobs) }</strong></div><div><small>Failed attachments</small><strong>{ fmt.Sprintf("%d", data.Stats.FailedAttachments) }</strong></div><div><small>Raw archive gaps</small><strong>{ fmt.Sprintf("%d", data.Stats.MissingRawMessages) }</strong></div><div><small>Database</small><strong>{ byteSize(data.Stats.DatabaseBytes) }</strong></div><div><small>Blob storage</small><strong>{ data.StorageHealth }</strong></div></div>
 		<div class="admin-section">

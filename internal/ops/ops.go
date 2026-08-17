@@ -26,6 +26,7 @@ type Manifest struct {
 	FormatVersion int            `json:"format_version"`
 	CreatedAt     time.Time      `json:"created_at"`
 	Database      ManifestObject `json:"database"`
+	MasterKey     ManifestObject `json:"master_key,omitempty"`
 	Blobs         []ManifestBlob `json:"blobs"`
 }
 
@@ -74,6 +75,17 @@ func Backup(ctx context.Context, cfg config.Config, repo *repository.Repository,
 		return Manifest{}, err
 	}
 	manifest := Manifest{FormatVersion: 1, CreatedAt: time.Now().UTC(), Database: ManifestObject{Path: "mailbox.db", Size: dbSize, SHA256: dbHash}}
+	if cfg.MasterKeyPath != "" {
+		keySize, keyHash, keyErr := fileDigest(cfg.MasterKeyPath)
+		if keyErr != nil {
+			return Manifest{}, fmt.Errorf("read master key: %w", keyErr)
+		}
+		keyDestination := filepath.Join(absolute, "master.key")
+		if err := copyFile(cfg.MasterKeyPath, keyDestination, 0o600); err != nil {
+			return Manifest{}, fmt.Errorf("copy master key: %w", err)
+		}
+		manifest.MasterKey = ManifestObject{Path: "master.key", Size: keySize, SHA256: keyHash}
+	}
 	references, err := repo.ReferencedBlobs(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -145,15 +157,46 @@ func Restore(ctx context.Context, cfg config.Config, input string) error {
 	if err := copyFile(databaseSource, cfg.DBPath, 0o600); err != nil {
 		return err
 	}
+	masterKeyPath := cfg.MasterKeyPath
+	if masterKeyPath == "" {
+		masterKeyPath = filepath.Join(filepath.Dir(cfg.DBPath), ".litebox", "master.key")
+	}
+	keyCreated := false
 	failed := true
 	defer func() {
 		if failed {
 			_ = os.Remove(cfg.DBPath)
+			if keyCreated {
+				_ = os.Remove(masterKeyPath)
+			}
 			for _, blob := range manifest.Blobs {
 				_ = destinationDelete(cfg.StorageRoot, blob.Key)
 			}
 		}
 	}()
+	if manifest.MasterKey.Path != "" {
+		keySource := filepath.Join(input, filepath.FromSlash(manifest.MasterKey.Path))
+		size, checksum, keyErr := fileDigest(keySource)
+		if keyErr != nil || size != manifest.MasterKey.Size || checksum != manifest.MasterKey.SHA256 {
+			return fmt.Errorf("backup master key failed integrity validation")
+		}
+		if _, statErr := os.Stat(masterKeyPath); statErr == nil {
+			existingSize, existingHash, digestErr := fileDigest(masterKeyPath)
+			if digestErr != nil || existingSize != size || existingHash != checksum {
+				return fmt.Errorf("refusing to overwrite a different master key")
+			}
+		} else if errors.Is(statErr, os.ErrNotExist) {
+			if err := os.MkdirAll(filepath.Dir(masterKeyPath), 0o700); err != nil {
+				return err
+			}
+			if err := copyFile(keySource, masterKeyPath, 0o600); err != nil {
+				return err
+			}
+			keyCreated = true
+		} else {
+			return statErr
+		}
+	}
 	temporary, err := os.MkdirTemp("", "litebox-restore-")
 	if err != nil {
 		return err

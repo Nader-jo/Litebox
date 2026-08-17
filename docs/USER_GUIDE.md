@@ -109,12 +109,23 @@ body.
 
 - A **mailbox** is an independent inbox and message history.
 - An **alias** receives into one mailbox and can be used as a From identity.
+- Each alias has a light color. The same color appears beside messages received
+  through that address, which makes shared inboxes easy to scan. Owners and
+  administrators can choose a different swatch under **Settings → Mailboxes**.
 - **Owner** and **Admin** can manage mailbox identity, aliases, and people.
 - **Member** can read, organize, and send mail.
 - **Viewer** can only read.
 
 Access changes apply on the next request. Ask a mailbox owner or administrator
 when an address, role, or mailbox selection is missing.
+
+## Schedule a private summary
+
+Open **Settings → Summary** to send a count-only report to a private address.
+Choose daily or Monday-only weekly delivery, a time zone, the local send hour,
+and all accessible mailboxes or a selected subset. Reports contain received,
+unread, and sent totals only—never subjects, senders, or message bodies. The
+summary is sent by the primary mailbox and can be disabled at any time.
 
 ## When something goes wrong
 

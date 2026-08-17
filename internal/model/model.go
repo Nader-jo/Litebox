@@ -80,6 +80,9 @@ type Message struct {
 	DeliveryStatus       string
 	ProviderErrorCode    string
 	ProviderErrorMessage string
+	MailboxAddressID     string
+	AliasAddress         string
+	AliasColor           string
 	SizeBytes            int64
 	Attachments          []Attachment
 }
@@ -183,6 +186,7 @@ type MailboxAddress struct {
 	IsPrimary       bool
 	InboundEnabled  bool
 	OutboundEnabled bool
+	Color           string
 }
 
 // MailboxMembership grants one user a role in one mailbox.
@@ -191,4 +195,38 @@ type MailboxMembership struct {
 	MailboxID string
 	Role      string
 	CreatedAt time.Time
+}
+
+// DigestSubscription controls one private mailbox activity summary per user.
+type DigestSubscription struct {
+	ID             string
+	UserID         string
+	RecipientEmail string
+	Frequency      string
+	Timezone       string
+	SendHour       int
+	MailboxScope   string
+	MailboxIDs     []string
+	Enabled        bool
+	LastSentAt     *time.Time
+}
+
+// DigestMailboxCount is the per-mailbox portion of a summary.
+type DigestMailboxCount struct {
+	MailboxID string
+	Address   string
+	Received  int
+	Unread    int
+	Sent      int
+}
+
+// DigestCounts is deliberately metadata-only: summaries never include subject
+// lines or message bodies.
+type DigestCounts struct {
+	Since     time.Time
+	Until     time.Time
+	Received  int
+	Unread    int
+	Sent      int
+	ByMailbox []DigestMailboxCount
 }

@@ -4,6 +4,43 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-17
+
+### Added
+
+- Add a guided first-run wizard for mailbox identity, public URL, Resend credentials, and the first administrator.
+- Persist product settings in SQLite with AES-GCM encrypted provider credentials and a file-backed instance master key.
+- Add light, deterministic colors for mailbox aliases and show the matching alias on every conversation message.
+- Add per-user daily or weekly metadata-only email summaries with timezone, delivery hour, mailbox scope, and private recipient controls.
+
+### Changed
+
+- Existing environment settings are imported once; runtime settings are subsequently managed under Settings → System.
+- Keep only deployment topology (database path, listener, storage paths, and trusted proxies) in environment configuration.
+
+### Security
+
+- Protect first-run setup with a one-time token printed to production container logs.
+- Never include message content in scheduled summaries; preserve the master-key file alongside backups or provide it separately during restore.
+
+## [0.3.1] - 2026-08-17
+
+### Added
+
+- Scan every AMD64 and ARM64 container build for fixed high and critical vulnerabilities in CI and before a GitHub release is made public.
+- Enforce a 20 MiB production-image budget and assert that the runtime contains no shell.
+
+### Changed
+
+- Replace the Alpine production stage with a minimal `scratch` runtime while retaining CA certificates, timezone data, license notices, a non-root identity, and writable `/data` and `/tmp` mount points.
+- Copy only the Go packages and embedded web assets required by the build, and verify downloaded Go modules before compiling.
+
+### Security
+
+- Remove the production shell, package manager, and operating-system packages, reducing the runtime filesystem and attack surface.
+- Upgrade release and contributor builds to Go 1.26.6 to incorporate the latest standard-library security fixes.
+- Pin the container scanner action to an immutable verified commit and the scanner itself to Trivy v0.74.0.
+
 ## [0.3.0] - 2026-08-11
 
 ### Added
@@ -91,7 +128,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Nader-jo/Litebox/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Nader-jo/Litebox/compare/v0.2.0...v0.2.1

@@ -10,6 +10,7 @@ import (
 	"net/mail"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nader-jo/Litebox/internal/model"
@@ -18,6 +19,7 @@ import (
 
 // Resend implements Client using the official Go SDK and bounded HTTP downloads.
 type Resend struct {
+	mu            sync.RWMutex
 	client        *resend.Client
 	http          *http.Client
 	webhookSecret string
@@ -29,6 +31,14 @@ func NewResend(apiKey, webhookSecret string) *Resend {
 	return &Resend{client: resend.NewCustomClient(httpClient, apiKey), http: httpClient, webhookSecret: webhookSecret}
 }
 
+// UpdateCredentials replaces provider credentials for subsequent requests.
+func (r *Resend) UpdateCredentials(apiKey, webhookSecret string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.client = resend.NewCustomClient(r.http, apiKey)
+	r.webhookSecret = webhookSecret
+}
+
 // NewResendForTest creates an adapter with an injectable API endpoint and HTTP client.
 func NewResendForTest(apiKey, webhookSecret string, httpClient *http.Client, baseURL *url.URL) *Resend {
 	client := resend.NewCustomClient(httpClient, apiKey)
@@ -38,9 +48,12 @@ func NewResendForTest(apiKey, webhookSecret string, httpClient *http.Client, bas
 
 // VerifyWebhook delegates raw-body signature verification to the official SDK.
 func (r *Resend) VerifyWebhook(raw []byte, headers WebhookHeaders) error {
-	err := r.client.Webhooks.Verify(&resend.VerifyWebhookOptions{
+	r.mu.RLock()
+	client, secret := r.client, r.webhookSecret
+	r.mu.RUnlock()
+	err := client.Webhooks.Verify(&resend.VerifyWebhookOptions{
 		Payload: string(raw), Headers: resend.WebhookHeaders{Id: headers.ID, Timestamp: headers.Timestamp, Signature: headers.Signature},
-		WebhookSecret: r.webhookSecret,
+		WebhookSecret: secret,
 	})
 	if err != nil {
 		return &Error{Kind: "authentication", Message: "invalid webhook signature", Cause: err}
@@ -50,7 +63,10 @@ func (r *Resend) VerifyWebhook(raw []byte, headers WebhookHeaders) error {
 
 // GetReceived retrieves normalized content and attachment metadata.
 func (r *Resend) GetReceived(ctx context.Context, id string) (ReceivedEmail, error) {
-	email, err := r.client.Emails.Receiving.GetWithContext(ctx, id)
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	email, err := client.Emails.Receiving.GetWithContext(ctx, id)
 	if err != nil {
 		return ReceivedEmail{}, classify(err)
 	}
@@ -70,7 +86,10 @@ func (r *Resend) GetReceived(ctx context.Context, id string) (ReceivedEmail, err
 
 // GetReceivedAttachment refreshes the provider's temporary attachment URL.
 func (r *Resend) GetReceivedAttachment(ctx context.Context, emailID, attachmentID string) (ReceivedAttachment, error) {
-	attachment, err := r.client.Emails.Receiving.GetAttachmentWithContext(ctx, emailID, attachmentID)
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
+	attachment, err := client.Emails.Receiving.GetAttachmentWithContext(ctx, emailID, attachmentID)
 	if err != nil {
 		return ReceivedAttachment{}, classify(err)
 	}
@@ -102,6 +121,9 @@ func (r *Resend) Download(ctx context.Context, rawURL string) (io.ReadCloser, in
 
 // Send submits a bounded outbound message with a stable idempotency key.
 func (r *Resend) Send(ctx context.Context, request SendRequest) (string, error) {
+	r.mu.RLock()
+	client := r.client
+	r.mu.RUnlock()
 	attachments := make([]*resend.Attachment, 0, len(request.Attachments))
 	for _, attachment := range request.Attachments {
 		attachments = append(attachments, &resend.Attachment{Content: attachment.Content, Filename: attachment.Filename,
@@ -112,7 +134,7 @@ func (r *Resend) Send(ctx context.Context, request SendRequest) (string, error) 
 		Bcc: formatAddressList(request.BCC), Subject: request.Subject, Text: request.Text, Headers: request.Headers,
 		Attachments: attachments,
 	}
-	response, err := r.client.Emails.SendWithOptions(ctx, params, &resend.SendEmailOptions{IdempotencyKey: request.IdempotencyKey})
+	response, err := client.Emails.SendWithOptions(ctx, params, &resend.SendEmailOptions{IdempotencyKey: request.IdempotencyKey})
 	if err != nil {
 		return "", classify(err)
 	}

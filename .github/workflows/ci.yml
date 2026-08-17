@@ -93,6 +93,16 @@ jobs:
             BUILD_DATE=unknown
           cache-from: type=gha,scope=container-${{ matrix.id }}
           cache-to: type=gha,mode=max,scope=container-${{ matrix.id }}
+      - name: Scan platform image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: litebox:ci-${{ matrix.id }}
+          version: v0.74.0
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
       - name: Smoke-test hardened container
         run: bash scripts/smoke-container.sh "litebox:ci-${{ matrix.id }}" "${{ matrix.platform }}"
 

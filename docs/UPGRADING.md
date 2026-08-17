@@ -21,8 +21,9 @@ docker compose ps
 docker compose exec mailbox /app/litebox version
 ```
 
-Copy `.env`, `compose.yaml`, and `Caddyfile` into your secret/configuration
-backup. Do not publish them; `.env` contains provider credentials.
+Copy `.env`, `compose.yaml`, `Caddyfile`, and `/data/.litebox/master.key` into
+your secret/configuration backup. Do not publish them; the master key protects
+the encrypted provider credentials now stored in SQLite.
 
 ## 2. Create a quiesced, independent backup
 
@@ -50,7 +51,7 @@ validates Compose, and waits for health:
 
 ```bash
 cd /opt/litebox
-sudo sh setup.sh --version 0.3.0
+sudo sh setup.sh --version 0.3.1
 ```
 
 Omit `--version` to select the latest stable release. Use `--no-start` to stage
@@ -84,12 +85,20 @@ Then sign in and verify:
 Keep the pre-upgrade backup until the new version has operated normally for a
 period appropriate to the mailbox's importance.
 
+### Settings and key recovery
+
+Version 0.4.0 imports legacy provider environment values once and then treats
+SQLite as the source of truth. Keep the master-key file with every backup. A
+database restored without its matching key can still be inspected for mailbox
+metadata, but encrypted provider credentials must be entered again under
+**Settings → System** before sending or webhook verification resumes.
+
 ## Manual image upgrade
 
 Operators who do not use the installer can pin and start the target image:
 
 ```bash
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.0|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.1|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 ```

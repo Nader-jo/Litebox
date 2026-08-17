@@ -29,7 +29,10 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - full-text search with useful operators;
 - first-run setup, Argon2id passwords, hashed sessions, CSRF protection, and login throttling;
 - independent mailboxes, shared aliases, per-mailbox roles, mailbox switching, and revocable device sessions;
-- one signed GHCR image tag that runs on Linux AMD64 and ARM64 VPS hosts;
+- light, configurable alias colors shown consistently in the inbox and conversation view;
+- per-user daily or weekly private summaries with counts by mailbox and no message content;
+- database-backed installation settings with encrypted Resend credentials and a one-time setup link;
+- one signed, shell-free GHCR image tag that runs on Linux AMD64 and ARM64 VPS hosts;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
 - mobile search, keyboard navigation, shortcut help, and clear progress/confirmation feedback.
@@ -106,9 +109,9 @@ non-interactive automation, and the fully manual path.
 
 To build from source for development instead, follow the [Development guide](docs/DEVELOPMENT.md) and use `compose.build.yaml`.
 
-### 2. Create the administrator
+### 2. Complete the first-run wizard
 
-Open `https://mail.example.com/setup` once. The first administrator becomes owner of the primary mailbox, and unauthenticated setup is then permanently disabled. Add more people and assign per-mailbox roles from **Settings → People**.
+Open the one-time `/setup?token=…` URL printed by the container. The wizard stores the mailbox identity, public URL, Resend credentials, and first administrator in SQLite. The token is invalidated after completion. Add more people and assign per-mailbox roles from **Settings → People**.
 
 For headless setup:
 
@@ -126,13 +129,13 @@ In Resend:
 2. apply the exact MX, SPF, DKIM, and return-path records shown by Resend;
 3. create `https://mail.example.com/webhooks/resend`;
 4. subscribe it to `email.received`, `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.failed`, `email.suppressed`, and `email.complained`;
-5. copy the webhook signing secret into `.env` and restart Litebox.
+5. paste the webhook signing secret into the setup wizard or **Settings → System**. Credentials are encrypted using `/data/.litebox/master.key`.
 
 See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict warning.
 
 ## Operations
 
-Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.3.0`, not `latest`. Each release workflow builds and boots both supported platforms before publishing the GitHub release.
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.3.1`, not `latest`. Each release workflow builds, scans, and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 
@@ -162,9 +165,13 @@ litebox version
 - A user may belong to any number of mailboxes and switch between them without signing in again.
 - Roles are `owner`, `admin`, `member`, and `viewer`. Viewers cannot mutate mailbox state or send mail.
 - Each browser/device login is a separate session. Users can inspect and revoke sessions under **Settings → Sessions**.
+- **Settings → Summary** can send a daily or weekly count-only report to a private address, scoped to all or selected mailboxes.
+- Alias colors are assigned automatically and can be changed from **Settings → Mailboxes**; messages display the color of the address they matched.
 - If one provider message targets addresses in two independent mailboxes, Litebox archives an isolated local copy in each mailbox.
 
 See [Multi-mailbox access](docs/MULTI_MAILBOX.md) for role semantics, routing behavior, and migration details.
+
+Runtime settings, encrypted secrets, setup-token recovery, alias colors, and summaries are covered in the [User guide](docs/USER_GUIDE.md).
 
 ### Backups
 
@@ -215,13 +222,13 @@ Litebox assumes every inbound message is hostile.
 - The mailbox selector cookie is untrusted: every request resolves it through the authenticated user's membership, and content repositories require a mailbox scope.
 - Authenticated sends are capped at 30 per user per rolling hour, and each message is capped at 20 recipients.
 - Production refuses an HTTP `APP_BASE_URL` or missing Resend credentials.
-- The container is non-root, drops Linux capabilities, uses a read-only root filesystem, and writes only to `/data` and a bounded `/tmp` tmpfs.
+- The shell-free `scratch` container is non-root, drops Linux capabilities, uses a read-only root filesystem, and writes only to `/data` and a bounded `/tmp` tmpfs.
 
 Review [SECURITY.md](SECURITY.md) for reporting and supported versions, and [Threat model](docs/THREAT_MODEL.md) for trust boundaries and residual risks.
 
 ## Development
 
-Requirements: Go 1.26.5+, Docker, and GNU Make (optional). The patch-level floor includes required Go standard-library security fixes.
+Requirements: Go 1.26.6+, Docker, and GNU Make (optional). The patch-level floor includes required Go standard-library security fixes.
 
 ```bash
 make setup # install pinned tools, generate code, and validate the checkout

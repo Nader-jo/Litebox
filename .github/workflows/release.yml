@@ -140,7 +140,8 @@ jobs:
           subject-name: ghcr.io/nader-jo/litebox
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
-      - name: Verify and smoke-test published platforms
+      - name: Resolve and smoke-test published platforms
+        id: platforms
         shell: bash
         env:
           IMAGE_REPOSITORY: ghcr.io/nader-jo/litebox
@@ -163,8 +164,30 @@ jobs:
           }
           amd64_digest="$(platform_digest amd64)"
           arm64_digest="$(platform_digest arm64)"
+          echo "amd64_digest=${amd64_digest}" >> "$GITHUB_OUTPUT"
+          echo "arm64_digest=${arm64_digest}" >> "$GITHUB_OUTPUT"
           bash scripts/smoke-container.sh "${IMAGE_REPOSITORY}@${amd64_digest}" linux/amd64
           bash scripts/smoke-container.sh "${IMAGE_REPOSITORY}@${arm64_digest}" linux/arm64
+      - name: Scan published AMD64 image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/nader-jo/litebox@${{ steps.platforms.outputs.amd64_digest }}
+          version: v0.74.0
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Scan published ARM64 image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/nader-jo/litebox@${{ steps.platforms.outputs.arm64_digest }}
+          version: v0.74.0
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
       - name: Publish verified GitHub release
         shell: bash
         env:

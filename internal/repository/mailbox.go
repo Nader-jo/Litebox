@@ -18,6 +18,7 @@ import (
 // InboundMessage is the fully archived provider-neutral input for one received email.
 type InboundMessage struct {
 	MailboxID           string
+	MailboxAddressID    string
 	ThreadID            string
 	ResendEmailID       string
 	RFCMessageID        string
@@ -214,13 +215,15 @@ func (r *Repository) ThreadByID(ctx context.Context, mailboxID, id string) (mode
 		return model.Thread{}, err
 	}
 	thread.IsArchived, thread.IsStarred, thread.IsTrashed = boolean(archived), boolean(starred), boolean(trashed)
-	rows, err := r.db.QueryContext(ctx, `SELECT id, thread_id, direction, COALESCE(resend_email_id, ''),
+	rows, err := r.db.QueryContext(ctx, `SELECT m.id, m.thread_id, m.direction, COALESCE(m.resend_email_id, ''),
         COALESCE(rfc_message_id, ''), COALESCE(in_reply_to, ''), COALESCE(references_header, ''),
-        from_name, from_address, subject, text_body, sanitized_html, body_format, remote_images_blocked,
-        COALESCE(raw_storage_key, ''), COALESCE(received_at, sent_at, created_at), is_read, ingest_status,
-        COALESCE(delivery_status, ''), COALESCE(provider_error_code, ''), COALESCE(provider_error_message, ''),
-        COALESCE(size_bytes, 0) FROM messages WHERE thread_id = ?
-        ORDER BY COALESCE(received_at, sent_at, created_at), id`, id)
+		m.from_name, m.from_address, m.subject, m.text_body, m.sanitized_html, m.body_format, m.remote_images_blocked,
+		COALESCE(m.raw_storage_key, ''), COALESCE(m.received_at, m.sent_at, m.created_at), m.is_read, m.ingest_status,
+		COALESCE(m.delivery_status, ''), COALESCE(m.provider_error_code, ''), COALESCE(m.provider_error_message, ''),
+		COALESCE(m.size_bytes, 0), COALESCE(m.mailbox_address_id, ''), COALESCE(ma.address, ''), COALESCE(ma.color, '')
+        FROM messages m LEFT JOIN mailbox_addresses ma ON ma.id = m.mailbox_address_id
+        WHERE m.thread_id = ?
+        ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at), m.id`, id)
 	if err != nil {
 		return model.Thread{}, err
 	}
@@ -233,7 +236,8 @@ func (r *Repository) ThreadByID(ctx context.Context, mailboxID, id string) (mode
 			&message.RFCMessageID, &message.InReplyTo, &message.References, &message.From.Name,
 			&message.From.Address, &message.Subject, &message.TextBody, &message.SanitizedHTML, &message.BodyFormat,
 			&blocked, &message.RawStorageKey, &occurred, &read, &message.IngestStatus, &message.DeliveryStatus,
-			&message.ProviderErrorCode, &message.ProviderErrorMessage, &message.SizeBytes); err != nil {
+			&message.ProviderErrorCode, &message.ProviderErrorMessage, &message.SizeBytes,
+			&message.MailboxAddressID, &message.AliasAddress, &message.AliasColor); err != nil {
 			return model.Thread{}, err
 		}
 		message.OccurredAt = fromMillis(occurred)
@@ -420,13 +424,13 @@ func (r *Repository) SaveInbound(ctx context.Context, input InboundMessage) (str
 			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO messages
-            (id, thread_id, mailbox_id, direction, resend_email_id, rfc_message_id, in_reply_to, references_header,
-             from_name, from_address, subject, subject_norm, text_body, sanitized_html, body_format,
-             remote_images_blocked, raw_storage_key, received_at, created_at, updated_at, is_read, ingest_status,
-             size_bytes, has_attachments)
-            VALUES (?, ?, ?, 'inbound', ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?,
-                    NULLIF(?, ''), ?, ?, ?, 0, ?, ?, ?)`, messageID, threadID, input.MailboxID, input.ResendEmailID,
-			input.RFCMessageID, input.InReplyTo, input.References, input.From.Name, input.From.Address, input.Subject,
+			(id, thread_id, mailbox_id, mailbox_address_id, direction, resend_email_id, rfc_message_id, in_reply_to, references_header,
+			 from_name, from_address, subject, subject_norm, text_body, sanitized_html, body_format,
+			 remote_images_blocked, raw_storage_key, received_at, created_at, updated_at, is_read, ingest_status,
+			 size_bytes, has_attachments)
+			VALUES (?, ?, ?, NULLIF(?, ''), 'inbound', ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?,
+			NULLIF(?, ''), ?, ?, ?, 0, ?, ?, ?)`, messageID, threadID, input.MailboxID, input.MailboxAddressID,
+			input.ResendEmailID, input.RFCMessageID, input.InReplyTo, input.References, input.From.Name, input.From.Address, input.Subject,
 			mailx.NormalizeSubject(input.Subject), input.TextBody, input.SanitizedHTML,
 			map[bool]string{true: "html", false: "text"}[input.SanitizedHTML != ""], boolInt(input.RemoteImagesBlocked),
 			input.RawStorageKey, millis(input.ReceivedAt), millis(time.Now()), millis(time.Now()), input.IngestStatus,

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.12
-FROM --platform=$BUILDPLATFORM golang:1.26.5-alpine3.23@sha256:622e56dbc11a8cfe87cafa2331e9a201877271cbff918af53d3be315f3da88cc AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine3.23@sha256:e57c41c1d5864341031181b0db34b9a537bb5773eb6428e4e5bdaea0f9135406 AS builder
 
 ARG VERSION=dev
 ARG COMMIT=none
@@ -8,12 +8,16 @@ ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /src
-RUN apk add --no-cache ca-certificates git
+RUN apk add --no-cache ca-certificates git tzdata
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download \
+    && go mod verify
 
-COPY . .
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+COPY web/ ./web/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
@@ -22,7 +26,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
       -o /out/litebox ./cmd/mailbox
 
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+# Assemble the few runtime files a static Go binary still needs. Keeping this
+# explicit lets the production stage use scratch without losing HTTPS,
+# timezone support, temporary storage, or a named numeric identity.
+RUN install -d -m 0700 /runtime/userfs/data /runtime/userfs/data/objects /runtime/userfs/data/tmp \
+    && install -d -m 1777 /runtime/rootfs/tmp \
+    && install -d -m 0755 /runtime/rootfs/etc /runtime/rootfs/licenses/Litebox \
+    && printf 'litebox:x:10001:10001:Litebox:/nonexistent:/sbin/nologin\n' > /runtime/rootfs/etc/passwd \
+    && printf 'litebox:x:10001:\n' > /runtime/rootfs/etc/group
+COPY LICENSE NOTICE /runtime/rootfs/licenses/Litebox/
+RUN chmod 0644 /runtime/rootfs/licenses/Litebox/LICENSE /runtime/rootfs/licenses/Litebox/NOTICE
+
+FROM scratch
 
 ARG VERSION=dev
 ARG COMMIT=none
@@ -39,21 +54,22 @@ LABEL org.opencontainers.image.title="Litebox" \
       org.opencontainers.image.revision="${COMMIT}" \
       org.opencontainers.image.created="${BUILD_DATE}"
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -g 10001 -S litebox \
-    && adduser -u 10001 -S -D -H -G litebox litebox \
-    && install -d -o litebox -g litebox -m 0700 /data /data/objects /data/tmp
-
 WORKDIR /app
-COPY --from=builder --chown=litebox:litebox /out/litebox /app/litebox
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /usr/share/zoneinfo/ /usr/share/zoneinfo/
+COPY --from=builder /runtime/rootfs/ /
+COPY --from=builder --chown=10001:10001 /runtime/userfs/ /
+COPY --from=builder --chown=10001:10001 /out/litebox /app/litebox
 
 # Make a bare `docker run litebox` persist state in the declared volume. The
 # production Compose profile supplies the remaining deployment-specific values.
 ENV APP_DATA_DIR=/data \
     APP_DB_PATH=/data/mailbox.db \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     STORAGE_BACKEND=filesystem \
     STORAGE_ROOT=/data/objects \
-    STORAGE_TMP_ROOT=/data/tmp
+    STORAGE_TMP_ROOT=/data/tmp \
+    TZ=UTC
 
 USER 10001:10001
 EXPOSE 8080

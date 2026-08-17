@@ -13,38 +13,49 @@ import (
 
 // PageData is the bounded view model shared by full and progressively enhanced pages.
 type PageData struct {
-	Title            string
-	PrimaryAddress   string
-	User             model.User
-	CSRFToken        string
-	CurrentFolder    string
-	Threads          []model.ThreadSummary
-	Thread           *model.Thread
-	Draft            *model.Draft
-	Drafts           []model.Draft
-	Jobs             []model.Job
-	Webhooks         []model.WebhookEvent
-	Stats            model.SystemStats
-	SearchQuery      string
-	StorageHealth    string
-	MailboxName      string
-	Mailbox          model.Mailbox
-	Mailboxes        []model.Mailbox
-	Addresses        []model.MailboxAddress
-	Members          []model.MailboxMembership
-	Sessions         []model.Session
-	CurrentSession   string
-	SettingsSection  string
-	CanManage        bool
-	CanWrite         bool
-	CanOperateSystem bool
-	Error            string
-	Notice           string
-	HasUser          bool
-	CurrentCursor    string
-	NextPageURL      string
-	FirstPageURL     string
-	BackURL          string
+	Title             string
+	PrimaryAddress    string
+	User              model.User
+	CSRFToken         string
+	CurrentFolder     string
+	Threads           []model.ThreadSummary
+	Thread            *model.Thread
+	Draft             *model.Draft
+	Drafts            []model.Draft
+	Jobs              []model.Job
+	Webhooks          []model.WebhookEvent
+	Stats             model.SystemStats
+	SearchQuery       string
+	StorageHealth     string
+	MailboxName       string
+	Mailbox           model.Mailbox
+	Mailboxes         []model.Mailbox
+	Addresses         []model.MailboxAddress
+	Members           []model.MailboxMembership
+	Sessions          []model.Session
+	CurrentSession    string
+	Digest            model.DigestSubscription
+	DigestMailboxes   []model.Mailbox
+	SettingsSection   string
+	CanManage         bool
+	CanWrite          bool
+	CanOperateSystem  bool
+	Error             string
+	Notice            string
+	HasUser           bool
+	SetupToken        string
+	SetupBaseURL      string
+	SetupMailboxName  string
+	SetupAPIKey       string
+	SetupWebhook      string
+	SetupDomainID     string
+	RuntimeBaseURL    string
+	RuntimeSessionTTL int
+	RuntimeLogLevel   string
+	CurrentCursor     string
+	NextPageURL       string
+	FirstPageURL      string
+	BackURL           string
 }
 
 func threadURL(id string, data PageData) string {
@@ -178,4 +189,26 @@ func sessionLabel(value string) string {
 		return value[:87] + "…"
 	}
 	return value
+}
+
+// aliasPalette is intentionally a small, accessible set of low-saturation
+// colors. It is shared by the settings picker and message badges.
+func aliasPalette() []string {
+	return []string{"#e0f2fe", "#dcfce7", "#fef3c7", "#fce7f3", "#ede9fe", "#ffedd5", "#ccfbf1", "#f3e8ff"}
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func digestHour(value model.DigestSubscription) int {
+	if value.ID == "" {
+		return 8
+	}
+	return value.SendHour
 }

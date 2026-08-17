@@ -81,7 +81,7 @@ func (r *Repository) MailboxByID(ctx context.Context, mailboxID string) (model.M
 // ListMailboxAddresses returns the primary address followed by aliases.
 func (r *Repository) ListMailboxAddresses(ctx context.Context, mailboxID string) ([]model.MailboxAddress, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id, mailbox_id, address, display_name, is_primary,
-		inbound_enabled, outbound_enabled FROM mailbox_addresses WHERE mailbox_id = ?
+		inbound_enabled, outbound_enabled, color FROM mailbox_addresses WHERE mailbox_id = ?
 		ORDER BY is_primary DESC, LOWER(address)`, mailboxID)
 	if err != nil {
 		return nil, err
@@ -92,10 +92,13 @@ func (r *Repository) ListMailboxAddresses(ctx context.Context, mailboxID string)
 		var address model.MailboxAddress
 		var primary, inbound, outbound int
 		if err := rows.Scan(&address.ID, &address.MailboxID, &address.Address, &address.DisplayName,
-			&primary, &inbound, &outbound); err != nil {
+			&primary, &inbound, &outbound, &address.Color); err != nil {
 			return nil, err
 		}
 		address.IsPrimary, address.InboundEnabled, address.OutboundEnabled = boolean(primary), boolean(inbound), boolean(outbound)
+		if address.Color == "" {
+			address.Color = colorForAddress(address.Address)
+		}
 		result = append(result, address)
 	}
 	return result, rows.Err()
@@ -124,9 +127,81 @@ func (r *Repository) EnsureMailboxAddress(ctx context.Context, mailboxID, value,
 	}
 	now := millis(time.Now())
 	_, err = r.db.ExecContext(ctx, `INSERT INTO mailbox_addresses
-		(id, mailbox_id, address, local_part, domain, display_name, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ids.New(), mailboxID, address, local, domain, displayName, now, now)
+		(id, mailbox_id, address, local_part, domain, display_name, color, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, ids.New(), mailboxID, address, local, domain, displayName, colorForAddress(address), now, now)
 	return err
+}
+
+// UpdateAddressColor changes the display color without changing routing.
+func (r *Repository) UpdateAddressColor(ctx context.Context, mailboxID, addressID, color string) error {
+	if !validAddressColor(color) {
+		return fmt.Errorf("invalid alias color")
+	}
+	result, err := r.db.ExecContext(ctx, "UPDATE mailbox_addresses SET color = ?, updated_at = ? WHERE id = ? AND mailbox_id = ?", color, millis(time.Now()), addressID, mailboxID)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdatePrimaryMailbox changes the bootstrap mailbox identity during setup.
+func (r *Repository) UpdatePrimaryMailbox(ctx context.Context, value, displayName string) error {
+	displayName = strings.TrimSpace(displayName)
+	address, local, domain, err := normalizeAddress(value)
+	if err != nil {
+		return err
+	}
+	if displayName == "" || len(displayName) > 128 {
+		return fmt.Errorf("display name must be between 1 and 128 characters")
+	}
+	now := millis(time.Now())
+	return r.Transaction(ctx, func(tx *sql.Tx) error {
+		var mailboxID string
+		if err := tx.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1").Scan(&mailboxID); err != nil {
+			return err
+		}
+		var existingMailbox string
+		var existingPrimary int
+		if err := tx.QueryRowContext(ctx, "SELECT mailbox_id, is_primary FROM mailbox_addresses WHERE address = ? LIMIT 1", address).Scan(&existingMailbox, &existingPrimary); err == nil {
+			if existingMailbox != mailboxID {
+				return fmt.Errorf("address is already assigned to another mailbox")
+			}
+			if existingPrimary == 0 {
+				if _, err := tx.ExecContext(ctx, "DELETE FROM mailbox_addresses WHERE mailbox_id = ? AND address = ? AND is_primary = 0", mailboxID, address); err != nil {
+					return err
+				}
+			}
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "UPDATE mailboxes SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE id = ?", address, local, domain, displayName, now, mailboxID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, "UPDATE mailbox_addresses SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE mailbox_id = ? AND is_primary = 1", address, local, domain, displayName, now, mailboxID)
+		return err
+	})
+}
+
+var aliasColors = []string{"#e0f2fe", "#dcfce7", "#fef3c7", "#fce7f3", "#ede9fe", "#ffedd5", "#ccfbf1", "#f3e8ff"}
+
+func colorForAddress(value string) string {
+	var sum uint32
+	for _, character := range strings.ToLower(value) {
+		sum = sum*31 + uint32(character)
+	}
+	return aliasColors[int(sum%uint32(len(aliasColors)))]
+}
+
+func validAddressColor(value string) bool {
+	for _, allowed := range aliasColors {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // AddMailboxAddress creates a sendable and receivable alias.
@@ -173,6 +248,24 @@ func (r *Repository) MailboxesForRecipients(ctx context.Context, recipients []mo
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result, nil
+}
+
+// MailboxAddressForRecipients resolves the first enabled local alias that a
+// provider message was addressed to. The result is used only for presentation;
+// mailbox routing has already been validated by MailboxesForRecipients.
+func (r *Repository) MailboxAddressForRecipients(ctx context.Context, mailboxID string, recipients []model.Address) (model.MailboxAddress, error) {
+	addresses, err := r.ListMailboxAddresses(ctx, mailboxID)
+	if err != nil {
+		return model.MailboxAddress{}, err
+	}
+	for _, recipient := range recipients {
+		for _, address := range addresses {
+			if address.InboundEnabled && strings.EqualFold(address.Address, recipient.Address) {
+				return address, nil
+			}
+		}
+	}
+	return model.MailboxAddress{}, ErrNotFound
 }
 
 // MailboxAddressSet returns every local address for reply-all de-duplication.
@@ -222,8 +315,8 @@ func (r *Repository) CreateMailbox(ctx context.Context, creatorID, value, displa
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO mailbox_addresses
-			(id, mailbox_id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`, ids.New(), mailbox.ID, address, local, domain, mailbox.DisplayName, millis(now), millis(now)); err != nil {
+			(id, mailbox_id, address, local_part, domain, display_name, is_primary, color, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, ids.New(), mailbox.ID, address, local, domain, mailbox.DisplayName, colorForAddress(address), millis(now), millis(now)); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_memberships

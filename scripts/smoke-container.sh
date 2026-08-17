@@ -7,6 +7,8 @@ suffix="$$-$(date +%s)"
 container="litebox-smoke-$suffix"
 volume="litebox-smoke-$suffix"
 
+# ShellCheck cannot infer the indirect invocation through trap.
+# shellcheck disable=SC2329
 cleanup() {
 	docker rm -f "$container" >/dev/null 2>&1 || true
 	docker volume rm "$volume" >/dev/null 2>&1 || true
@@ -53,6 +55,18 @@ fi
 configured_user=$(docker image inspect --format '{{.Config.User}}' "$image")
 if [ "$configured_user" != "10001:10001" ]; then
 	echo "expected image user 10001:10001, got $configured_user" >&2
+	exit 1
+fi
+
+image_size=$(docker image inspect --format '{{.Size}}' "$image")
+max_image_size=${LITEBOX_MAX_IMAGE_SIZE_BYTES:-20971520}
+if [ "$image_size" -gt "$max_image_size" ]; then
+	echo "image size $image_size bytes exceeds budget $max_image_size bytes" >&2
+	exit 1
+fi
+
+if run_for_platform --rm --entrypoint /bin/sh "$image" -c true >/dev/null 2>&1; then
+	echo "production image unexpectedly contains /bin/sh" >&2
 	exit 1
 fi
 

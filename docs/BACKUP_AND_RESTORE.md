@@ -7,9 +7,14 @@ Litebox's simple topology intentionally puts SQLite and private blobs under one 
 ```text
 /data/mailbox.db
 /data/objects/
+/data/.litebox/master.key
 ```
 
-Also preserve deployment configuration and secrets through your secret manager. They are not included in the mailbox backup.
+The master key is part of the protected dataset and must remain paired with the
+database. Preserve it with the backup or store it separately in a secret
+manager. Provider credentials are encrypted in SQLite from v0.4.0 onward; a
+restore without the matching key requires re-entering them in **Settings →
+System**.
 
 ## Supported backup contract
 

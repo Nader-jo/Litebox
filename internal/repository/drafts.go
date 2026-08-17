@@ -246,11 +246,11 @@ func (r *Repository) QueueDraft(ctx context.Context, draftID, mailboxID string, 
 			references = mailx.References(references, inReplyTo)
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO messages
-            (id, thread_id, mailbox_id, direction, rfc_message_id, in_reply_to, references_header,
+            (id, thread_id, mailbox_id, mailbox_address_id, direction, rfc_message_id, in_reply_to, references_header,
              from_name, from_address, subject, subject_norm, text_body, body_format, sent_at,
              created_at, updated_at, is_read, ingest_status, delivery_status, has_attachments)
-            VALUES (?, ?, ?, 'outbound', ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, 'text', ?, ?, ?, 1, 'ready', 'queued', ?)`,
-			messageID, threadID, mailboxID, rfcMessageID, inReplyTo, references, from.Name, from.Address,
+            VALUES (?, ?, ?, (SELECT id FROM mailbox_addresses WHERE mailbox_id = ? AND LOWER(address) = LOWER(?) LIMIT 1), 'outbound', ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, 'text', ?, ?, ?, 1, 'ready', 'queued', ?)`,
+			messageID, threadID, mailboxID, mailboxID, from.Address, rfcMessageID, inReplyTo, references, from.Name, from.Address,
 			draft.Subject, mailx.NormalizeSubject(draft.Subject), draft.TextBody, millis(now), millis(now), millis(now), boolInt(len(draft.Attachments) > 0))
 		if err != nil {
 			return err

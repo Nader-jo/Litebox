@@ -26,6 +26,7 @@ import (
 	"github.com/Nader-jo/Litebox/internal/repository"
 	"github.com/Nader-jo/Litebox/internal/search"
 	"github.com/Nader-jo/Litebox/internal/service"
+	"github.com/Nader-jo/Litebox/internal/settings"
 	"github.com/Nader-jo/Litebox/internal/ui"
 )
 
@@ -63,7 +64,19 @@ func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, ui.SetupPage(ui.PageData{Title: "First-run setup", PrimaryAddress: s.config.PrimaryAddress}))
+	token := r.URL.Query().Get("token")
+	if s.config.Environment == "production" && s.settings != nil {
+		valid, err := s.settings.VerifySetupToken(r.Context(), token)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if !valid {
+			s.renderError(w, r, http.StatusForbidden, "Use the one-time setup link printed in the container logs.")
+			return
+		}
+	}
+	s.render(w, r, http.StatusOK, ui.SetupPage(s.setupData(token, "")))
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +89,18 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusNotFound, "Setup is already complete.")
 		return
 	}
+	token := r.FormValue("token")
+	if s.config.Environment == "production" && s.settings != nil {
+		valid, err := s.settings.VerifySetupToken(r.Context(), token)
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		if !valid {
+			s.renderError(w, r, http.StatusForbidden, "The setup link is invalid or expired.")
+			return
+		}
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := r.ParseForm(); err != nil {
 		s.renderError(w, r, http.StatusBadRequest, "Invalid setup form.")
@@ -83,24 +108,83 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	emailAddress := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
 	if _, err := mail.ParseAddress(emailAddress); err != nil {
-		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Error: "Enter a valid administrator email."}))
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid administrator email.")))
+		return
+	}
+	primaryAddress := strings.TrimSpace(r.FormValue("primary_address"))
+	if primaryAddress == "" {
+		primaryAddress = s.config.PrimaryAddress
+	}
+	if parsed, err := mail.ParseAddress(primaryAddress); err != nil || !strings.EqualFold(parsed.Address, primaryAddress) {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid mailbox address.")))
+		return
+	} else {
+		primaryAddress = strings.ToLower(parsed.Address)
+	}
+	mailboxName := strings.TrimSpace(r.FormValue("mailbox_display_name"))
+	if mailboxName == "" {
+		mailboxName = s.config.DisplayName
+	}
+	baseURL := strings.TrimSpace(r.FormValue("base_url"))
+	if baseURL == "" {
+		baseURL = s.config.BaseURL.String()
+	}
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || (s.config.Environment == "production" && parsedURL.Scheme != "https") {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid public URL (HTTPS is required in production).")))
+		return
+	}
+	apiKey, webhookSecret, domainID := strings.TrimSpace(r.FormValue("resend_api_key")), strings.TrimSpace(r.FormValue("resend_webhook_secret")), strings.TrimSpace(r.FormValue("resend_domain_id"))
+	if s.config.Environment == "production" && (apiKey == "" || webhookSecret == "") {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Resend API key and webhook secret are required in production.")))
 		return
 	}
 	password := r.FormValue("password")
 	if password != r.FormValue("password_confirmation") {
-		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Error: "The passwords do not match."}))
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "The passwords do not match.")))
 		return
 	}
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Error: err.Error()}))
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, err.Error())))
 		return
+	}
+	if err := s.repository.UpdatePrimaryMailbox(r.Context(), primaryAddress, mailboxName); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	current := s.config
+	current.BaseURL = parsedURL
+	current.PrimaryAddress = primaryAddress
+	current.DisplayName = mailboxName
+	current.ResendAPIKey, current.ResendWebhookSecret, current.ResendDomainID = apiKey, webhookSecret, domainID
+	if s.settings != nil {
+		value := settings.Values{Configured: true, BaseURL: parsedURL.String(), SessionTTLHours: int(current.SessionTTL / time.Hour), LogLevel: current.LogLevel,
+			MaxWebhookBodyBytes: current.MaxWebhookBodyBytes, MaxMessageTextBytes: current.MaxMessageTextBytes, MaxUploadRequestBytes: current.MaxUploadRequestBytes,
+			MaxOutboundAttachmentBytes: current.MaxOutboundAttachmentBytes, MaxAttachmentCount: current.MaxAttachmentCount,
+			ResendAPIKey: apiKey, ResendWebhookSecret: webhookSecret, ResendDomainID: domainID}
+		if err := s.settings.Save(r.Context(), value); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
 	}
 	if _, err := s.repository.CreateFirstUser(r.Context(), emailAddress, r.FormValue("display_name"), hash); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
+	if s.settings != nil {
+		_ = s.settings.ConsumeSetupToken(r.Context())
+	}
+	if s.applyConfig != nil {
+		s.applyConfig(current)
+	}
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func (s *Server) setupData(token, message string) ui.PageData {
+	return ui.PageData{Title: "First-run setup", PrimaryAddress: s.config.PrimaryAddress, SetupToken: token,
+		SetupBaseURL: s.config.BaseURL.String(), SetupMailboxName: s.config.DisplayName,
+		SetupDomainID: s.config.ResendDomainID, Error: message}
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -707,6 +791,15 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data.Title, data.SettingsSection, data.Sessions, data.CurrentSession = "Sessions", "sessions", sessions, state.Session.ID
+	case "/settings/digest":
+		if digest, err := s.repository.GetDigestSubscription(r.Context(), state.Session.User.ID); err == nil {
+			data.Digest = digest
+		} else if !errors.Is(err, repository.ErrNotFound) {
+			s.internalError(w, r, err)
+			return
+		}
+		data.DigestMailboxes = data.Mailboxes
+		data.Title, data.SettingsSection = "Email summary", "digest"
 	default:
 		if !data.CanOperateSystem {
 			s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system operations.")
@@ -732,9 +825,86 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			health = "Unavailable"
 		}
 		data.Title, data.SettingsSection = "System", "system"
+		data.RuntimeBaseURL, data.RuntimeSessionTTL, data.RuntimeLogLevel = s.config.BaseURL.String(), int(s.config.SessionTTL/time.Hour), s.config.LogLevel
 		data.Stats, data.Jobs, data.Webhooks, data.StorageHealth = stats, jobList, webhooks, health
 	}
 	s.render(w, r, http.StatusOK, ui.MailboxPage(data))
+}
+
+func (s *Server) updateDigest(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	sendHour, err := strconv.Atoi(strings.TrimSpace(r.FormValue("send_hour")))
+	if err != nil {
+		sendHour = 8
+	}
+	mailboxScope := r.FormValue("mailbox_scope")
+	if mailboxScope == "" {
+		mailboxScope = "all"
+	}
+	var selected []string
+	for _, id := range r.Form["mailbox_ids"] {
+		if id != "" {
+			selected = append(selected, id)
+		}
+	}
+	sub := model.DigestSubscription{UserID: state.Session.User.ID, RecipientEmail: strings.TrimSpace(r.FormValue("recipient_email")),
+		Frequency: r.FormValue("frequency"), Timezone: strings.TrimSpace(r.FormValue("timezone")), SendHour: sendHour,
+		MailboxScope: mailboxScope, MailboxIDs: selected, Enabled: r.FormValue("enabled") == "on"}
+	if sub.Timezone == "" {
+		sub.Timezone = "UTC"
+	}
+	if err := s.repository.SaveDigestSubscription(r.Context(), sub); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	http.Redirect(w, r, "/settings/digest", http.StatusSeeOther)
+}
+
+func (s *Server) updateSystemSettings(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if !state.Mailbox.IsPrimary || (state.Mailbox.Role != "owner" && state.Mailbox.Role != "admin") || s.settings == nil {
+		s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system settings.")
+		return
+	}
+	baseURL, err := url.Parse(strings.TrimSpace(r.FormValue("base_url")))
+	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" || (s.config.Environment == "production" && baseURL.Scheme != "https") {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "Enter a valid public URL (HTTPS is required in production).")
+		return
+	}
+	ttl, err := strconv.Atoi(r.FormValue("session_ttl_hours"))
+	if err != nil || ttl < 1 || ttl > 8760 {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "Session lifetime must be between 1 and 8760 hours.")
+		return
+	}
+	logLevel := strings.ToLower(strings.TrimSpace(r.FormValue("log_level")))
+	if logLevel != "debug" && logLevel != "info" && logLevel != "warn" && logLevel != "error" {
+		logLevel = "info"
+	}
+	apiKey, secret, domain := strings.TrimSpace(r.FormValue("resend_api_key")), strings.TrimSpace(r.FormValue("resend_webhook_secret")), strings.TrimSpace(r.FormValue("resend_domain_id"))
+	if apiKey == "" {
+		apiKey = s.config.ResendAPIKey
+	}
+	if secret == "" {
+		secret = s.config.ResendWebhookSecret
+	}
+	if domain == "" {
+		domain = s.config.ResendDomainID
+	}
+	value := settings.Values{Configured: true, BaseURL: baseURL.String(), SessionTTLHours: ttl, LogLevel: logLevel,
+		MaxWebhookBodyBytes: s.config.MaxWebhookBodyBytes, MaxMessageTextBytes: s.config.MaxMessageTextBytes, MaxUploadRequestBytes: s.config.MaxUploadRequestBytes,
+		MaxOutboundAttachmentBytes: s.config.MaxOutboundAttachmentBytes, MaxAttachmentCount: s.config.MaxAttachmentCount,
+		ResendAPIKey: apiKey, ResendWebhookSecret: secret, ResendDomainID: domain}
+	if err := s.settings.Save(r.Context(), value); err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	next := s.config
+	next.BaseURL, next.SessionTTL, next.LogLevel = baseURL, time.Duration(ttl)*time.Hour, logLevel
+	next.ResendAPIKey, next.ResendWebhookSecret, next.ResendDomainID = apiKey, secret, domain
+	if s.applyConfig != nil {
+		s.applyConfig(next)
+	}
+	http.Redirect(w, r, "/admin/system", http.StatusSeeOther)
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
@@ -777,6 +947,19 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.repository.DeleteMailboxAddress(r.Context(), state.Mailbox.ID, r.PathValue("addressID")); err != nil {
 		s.repositoryError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+}
+
+func (s *Server) updateAliasColor(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	if r.PathValue("mailboxID") != state.Mailbox.ID {
+		s.renderError(w, r, http.StatusForbidden, "The selected mailbox changed. Refresh and try again.")
+		return
+	}
+	if err := s.repository.UpdateAddressColor(r.Context(), state.Mailbox.ID, r.PathValue("addressID"), r.FormValue("color")); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)

@@ -2,7 +2,7 @@
 
 ## Toolchain
 
-- Go 1.26.5 or newer (the patch-level floor includes required standard-library security fixes);
+- Go 1.26.6 or newer (the patch-level floor includes required standard-library security fixes);
 - Docker Engine and Compose for container verification;
 - GNU Make for convenience targets (all commands can also run directly).
 
@@ -35,7 +35,7 @@ docker compose -f compose.yaml -f compose.build.yaml up -d --build
 make container-smoke
 ```
 
-Production Compose intentionally has no `build` section; it consumes the published multi-platform image.
+Production Compose intentionally has no `build` section; it consumes the published multi-platform, shell-free `scratch` image.
 
 ## Development container
 
@@ -110,7 +110,11 @@ GitHub or start a real Litebox container.
 configuration. CI runs it for every push and pull request in addition to Go
 vet and staticcheck.
 
-CI builds and health-checks both `linux/amd64` and `linux/arm64`. The release workflow repeats those checks against the published digest before making the draft GitHub release public.
+CI builds, vulnerability-scans, and health-checks both `linux/amd64` and
+`linux/arm64`. The release workflow repeats the scan and hardened smoke tests
+against each published platform digest before making the draft GitHub release
+public. Container smoke tests also enforce the 20 MiB size budget and verify
+that the production filesystem has no shell.
 
 The required high-risk suites cover:
 

@@ -201,6 +201,8 @@ input:focus, textarea:focus, select:focus { border-color: #8bb1ff; box-shadow: 0
 .avatar-message { width: 37px; height: 37px; }
 .message-sender { display: grid; min-width: 0; line-height: 1.25; }
 .message-sender small { color: var(--muted); font-size: 11px; }
+.alias-pill { display: inline-flex; width: fit-content; align-items: center; gap: 4px; margin-top: 4px; padding: 3px 7px; border-radius: 999px; color: #24364b; font-size: 10px; font-weight: 750; }
+.alias-pill .ui-icon { width: 11px; height: 11px; }
 .message-time { display: grid; justify-items: end; gap: 3px; margin-left: auto; color: var(--muted); font-size: 11px; }
 .recipients { padding: 0 17px 12px 65px; color: var(--muted); font-size: 11px; }
 .recipients summary { overflow: hidden; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
@@ -270,6 +272,12 @@ input:focus, textarea:focus, select:focus { border-color: #8bb1ff; box-shadow: 0
 .address-list > div, .session-list > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .address-list > div:last-child, .session-list > div:last-child { border-bottom: 0; }
 .address-list span, .session-list span { display: grid; gap: 2px; min-width: 0; }
+.address-list .address-identity { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; }
+.alias-color-dot { width: 12px; height: 12px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px var(--line-strong); }
+.alias-color-form { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.alias-color-form select { width: 52px; min-width: 52px; height: 30px; padding: 0 4px; border-radius: 8px; color: #24364b; cursor: pointer; }
+.digest-mailboxes { display: flex; flex-wrap: wrap; gap: 8px 14px; grid-column: 1 / -1; padding: 10px 0; }
+.digest-mailboxes label, .checkbox-label { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .address-list small, .session-list small, .table-subtitle { display: block; color: var(--muted); font-size: 10px; font-weight: 500; }
 .badge { display: inline-flex; width: fit-content; padding: 2px 7px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 10px; font-weight: 750; }
 .detail-list { display: grid; max-width: 680px; grid-template-columns: 160px 1fr; gap: 8px 16px; }

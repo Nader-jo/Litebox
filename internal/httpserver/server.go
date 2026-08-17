@@ -23,6 +23,7 @@ import (
 	"github.com/Nader-jo/Litebox/internal/provider"
 	"github.com/Nader-jo/Litebox/internal/repository"
 	"github.com/Nader-jo/Litebox/internal/service"
+	"github.com/Nader-jo/Litebox/internal/settings"
 	webassets "github.com/Nader-jo/Litebox/web"
 )
 
@@ -37,16 +38,18 @@ type authState struct {
 
 // Server owns HTTP routing and middleware.
 type Server struct {
-	config     config.Config
-	repository *repository.Repository
-	store      blobstore.Store
-	provider   provider.Client
-	mailbox    *service.Mailbox
-	logger     *slog.Logger
-	http       *http.Server
-	trusted    []*net.IPNet
-	login      *loginLimiter
-	send       *windowLimiter
+	config      config.Config
+	repository  *repository.Repository
+	store       blobstore.Store
+	provider    provider.Client
+	mailbox     *service.Mailbox
+	logger      *slog.Logger
+	http        *http.Server
+	trusted     []*net.IPNet
+	login       *loginLimiter
+	send        *windowLimiter
+	settings    *settings.Store
+	applyConfig func(config.Config)
 }
 
 // New builds the complete HTTP server without starting a listener.
@@ -78,6 +81,16 @@ func New(cfg config.Config, repo *repository.Repository, store blobstore.Store, 
 
 // HTTP returns the configured standard-library server.
 func (s *Server) HTTP() *http.Server { return s.http }
+
+// Configure attaches persisted settings and the callback used after the setup
+// wizard commits a new runtime snapshot.
+func (s *Server) Configure(store *settings.Store, apply func(config.Config)) {
+	s.settings, s.applyConfig = store, apply
+}
+
+// ApplyConfig replaces reloadable runtime values. Listener and trust topology
+// remain fixed for the process lifetime.
+func (s *Server) ApplyConfig(cfg config.Config) { s.config = cfg }
 
 func (s *Server) routes(mux *http.ServeMux) {
 	staticFS, err := fs.Sub(webassets.Static, "static")
@@ -157,9 +170,13 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("GET /settings/mailboxes", s.authenticate(http.HandlerFunc(s.admin)))
 	mux.Handle("GET /settings/people", s.authenticate(http.HandlerFunc(s.admin)))
 	mux.Handle("GET /settings/sessions", s.authenticate(http.HandlerFunc(s.admin)))
+	mux.Handle("GET /settings/digest", s.authenticate(http.HandlerFunc(s.admin)))
+	mux.Handle("POST /settings/system", manageable(s.updateSystemSettings))
 	mux.Handle("POST /settings/profile", manageable(s.updateSettings))
+	mux.Handle("POST /settings/digest", authenticated(s.updateDigest))
 	mux.Handle("POST /mailboxes", manageable(s.createMailbox))
 	mux.Handle("POST /mailboxes/{mailboxID}/aliases", manageable(s.addAlias))
+	mux.Handle("POST /mailboxes/{mailboxID}/aliases/{addressID}/color", manageable(s.updateAliasColor))
 	mux.Handle("POST /mailboxes/{mailboxID}/aliases/{addressID}/delete", manageable(s.deleteAlias))
 	mux.Handle("POST /mailboxes/{mailboxID}/members", manageable(s.addMember))
 	mux.Handle("POST /mailboxes/{mailboxID}/members/{userID}/delete", manageable(s.removeMember))

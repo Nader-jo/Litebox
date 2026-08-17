@@ -36,6 +36,9 @@ func NewMailbox(cfg config.Config, repo *repository.Repository, store blobstore.
 	return &Mailbox{config: cfg, repository: repo, store: store, provider: client}
 }
 
+// ApplyConfig updates settings that are safe to reload while the process runs.
+func (s *Mailbox) ApplyConfig(cfg config.Config) { s.config = cfg }
+
 // JobHandlers returns every supported durable work kind.
 func (s *Mailbox) JobHandlers() map[string]jobs.Handler {
 	return map[string]jobs.Handler{
@@ -44,6 +47,7 @@ func (s *Mailbox) JobHandlers() map[string]jobs.Handler {
 		"process_provider_event": s.providerEventJob,
 		"delete_objects":         s.deleteObjectsJob,
 		"cleanup_sessions":       s.cleanupSessionsJob,
+		"send_digest":            s.digestJob,
 	}
 }
 
@@ -107,14 +111,18 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 		received.HTML = received.HTML[:s.config.MaxMessageTextBytes]
 	}
 	for _, mailbox := range mailboxes {
-		if err := s.ingestIntoMailbox(ctx, mailbox, received, from, to, cc, bcc, replyTo, bestEffort); err != nil {
+		address, addressErr := s.repository.MailboxAddressForRecipients(ctx, mailbox.ID, localRecipients)
+		if addressErr != nil && !errors.Is(addressErr, repository.ErrNotFound) {
+			return addressErr
+		}
+		if err := s.ingestIntoMailbox(ctx, mailbox, address.ID, received, from, to, cc, bcc, replyTo, bestEffort); err != nil {
 			return err
 		}
 	}
 	return s.repository.CompleteWebhook(ctx, webhookEventID, "succeeded")
 }
 
-func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, received provider.ReceivedEmail,
+func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, mailboxAddressID string, received provider.ReceivedEmail,
 	from model.Address, to, cc, bcc, replyTo []model.Address, bestEffort bool) error {
 	var attachments []model.Attachment
 	cidRoutes := make(map[string]string)
@@ -130,7 +138,7 @@ func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, 
 	if textBody == "" && sanitized != "" {
 		textBody = mailx.TextFromHTML(sanitized)
 	}
-	input := repository.InboundMessage{MailboxID: mailbox.ID, ResendEmailID: received.ID, RFCMessageID: received.MessageID,
+	input := repository.InboundMessage{MailboxID: mailbox.ID, MailboxAddressID: mailboxAddressID, ResendEmailID: received.ID, RFCMessageID: received.MessageID,
 		InReplyTo: headerValue(received.Headers, "in-reply-to"), References: headerValue(received.Headers, "references"),
 		From: from, Recipients: map[string][]model.Address{"to": to, "cc": cc, "bcc": bcc, "reply_to": replyTo},
 		Subject: cleanHeader(received.Subject), TextBody: textBody, SanitizedHTML: sanitized, RemoteImagesBlocked: blocked,
@@ -263,6 +271,49 @@ func (s *Mailbox) Send(ctx context.Context, messageID string) error {
 		return err
 	}
 	return s.repository.MarkMessageSubmitted(ctx, message.ID, resendID)
+}
+
+type digestPayload struct {
+	SubscriptionID string `json:"subscription_id"`
+	Since          int64  `json:"since"`
+	Until          int64  `json:"until"`
+}
+
+func (s *Mailbox) digestJob(ctx context.Context, job model.Job) error {
+	var payload digestPayload
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil || payload.SubscriptionID == "" || payload.Until <= payload.Since {
+		return jobs.Permanent(fmt.Errorf("invalid digest job payload"))
+	}
+	return s.SendDigest(ctx, payload.SubscriptionID, time.UnixMilli(payload.Since).UTC(), time.UnixMilli(payload.Until).UTC())
+}
+
+// SendDigest sends a metadata-only summary to the recipient configured by the
+// user. It deliberately excludes subjects, senders, and message bodies.
+func (s *Mailbox) SendDigest(ctx context.Context, subscriptionID string, since, until time.Time) error {
+	sub, err := s.repository.DigestSubscriptionByID(ctx, subscriptionID)
+	if err != nil {
+		return err
+	}
+	counts, err := s.repository.DigestCounts(ctx, sub, since, until)
+	if err != nil {
+		return err
+	}
+	primary, err := s.repository.PrimaryMailbox(ctx)
+	if err != nil {
+		return err
+	}
+	body := fmt.Sprintf("Litebox mailbox summary\n\nPeriod: %s – %s\nReceived: %d\nUnread: %d\nSent: %d\n\n",
+		since.In(time.Local).Format("Jan 2, 2006 15:04"), until.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Received, counts.Unread, counts.Sent)
+	for _, mailbox := range counts.ByMailbox {
+		body += fmt.Sprintf("%s — received %d, unread %d, sent %d\n", mailbox.Address, mailbox.Received, mailbox.Unread, mailbox.Sent)
+	}
+	_, err = s.provider.Send(ctx, provider.SendRequest{From: model.Address{Name: primary.DisplayName, Address: primary.Address},
+		To: []model.Address{{Address: sub.RecipientEmail}}, Subject: "Litebox mailbox summary", Text: body,
+		Headers: map[string]string{"X-Litebox-Digest": "1"}, IdempotencyKey: "litebox-digest/" + sub.ID + "/" + fmt.Sprint(until.Unix())})
+	if err != nil {
+		return err
+	}
+	return s.repository.MarkDigestSent(ctx, sub.ID, until)
 }
 
 type providerEventPayload struct {

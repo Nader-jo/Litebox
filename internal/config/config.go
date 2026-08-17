@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Nader-jo/Litebox/internal/settings"
 )
 
 const (
@@ -23,11 +25,16 @@ const (
 // Config contains all runtime configuration. Packages outside config do not read
 // environment variables directly, which keeps validation and tests deterministic.
 type Config struct {
-	Environment                string
+	Environment string
+	// AllowUnconfigured permits the first-run wizard to start without provider
+	// credentials. It is set only by Load; hand-built production configs remain
+	// strict and must include provider credentials.
+	AllowUnconfigured          bool
 	BaseURL                    *url.URL
 	ListenAddr                 string
 	DataDir                    string
 	DBPath                     string
+	MasterKeyPath              string
 	CookieName                 string
 	SessionTTL                 time.Duration
 	LogLevel                   string
@@ -63,10 +70,12 @@ func Load() (Config, error) {
 	allowed := parseList(env("MAILBOX_ALLOWED_RECIPIENTS", primary))
 	cfg := Config{
 		Environment:                strings.ToLower(env("APP_ENV", "development")),
+		AllowUnconfigured:          true,
 		BaseURL:                    baseURL,
 		ListenAddr:                 env("APP_LISTEN_ADDR", ":8080"),
 		DataDir:                    dataDir,
 		DBPath:                     env("APP_DB_PATH", filepath.Join(dataDir, "mailbox.db")),
+		MasterKeyPath:              env("LITEBOX_MASTER_KEY_FILE", filepath.Join(dataDir, ".litebox", "master.key")),
 		CookieName:                 env("APP_COOKIE_NAME", "litebox_session"),
 		SessionTTL:                 durationHours("APP_SESSION_TTL_HOURS", 168),
 		LogLevel:                   strings.ToLower(env("APP_LOG_LEVEL", "info")),
@@ -132,15 +141,58 @@ func (c Config) Validate() error {
 		c.MaxAttachmentCount <= 0 || c.WorkerCount <= 0 || c.JobPollInterval <= 0 || c.JobLease <= 0 {
 		problems = append(problems, errors.New("limits, session lifetime, and worker settings must be positive"))
 	}
-	if c.Environment == "production" {
-		if c.ResendAPIKey == "" {
+	if c.Environment == "production" && !c.AllowUnconfigured {
+		if strings.TrimSpace(c.ResendAPIKey) == "" {
 			problems = append(problems, errors.New("RESEND_API_KEY is required in production"))
 		}
-		if c.ResendWebhookSecret == "" {
+		if strings.TrimSpace(c.ResendWebhookSecret) == "" {
 			problems = append(problems, errors.New("RESEND_WEBHOOK_SECRET is required in production"))
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// ApplySettings overlays the persisted installation snapshot on bootstrap
+// configuration. Paths, listener, storage topology, and proxy trust remain
+// bootstrap-controlled; product settings are database-backed.
+func (c Config) ApplySettings(value settings.Values) (Config, error) {
+	if value.BaseURL != "" {
+		baseURL, err := url.Parse(value.BaseURL)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse persisted base URL: %w", err)
+		}
+		c.BaseURL = baseURL
+	}
+	if value.SessionTTLHours > 0 {
+		c.SessionTTL = time.Duration(value.SessionTTLHours) * time.Hour
+	}
+	if value.LogLevel != "" {
+		c.LogLevel = strings.ToLower(value.LogLevel)
+	}
+	if value.MaxWebhookBodyBytes > 0 {
+		c.MaxWebhookBodyBytes = value.MaxWebhookBodyBytes
+	}
+	if value.MaxMessageTextBytes > 0 {
+		c.MaxMessageTextBytes = value.MaxMessageTextBytes
+	}
+	if value.MaxUploadRequestBytes > 0 {
+		c.MaxUploadRequestBytes = value.MaxUploadRequestBytes
+	}
+	if value.MaxOutboundAttachmentBytes > 0 {
+		c.MaxOutboundAttachmentBytes = value.MaxOutboundAttachmentBytes
+	}
+	if value.MaxAttachmentCount > 0 {
+		c.MaxAttachmentCount = value.MaxAttachmentCount
+	}
+	// Keep bootstrap credentials available to tests and legacy deployments until
+	// the setup wizard has explicitly saved the database-backed snapshot.
+	if value.Configured || value.ResendAPIKey != "" || value.ResendWebhookSecret != "" || value.ResendDomainID != "" {
+		c.ResendAPIKey, c.ResendWebhookSecret, c.ResendDomainID = value.ResendAPIKey, value.ResendWebhookSecret, value.ResendDomainID
+	}
+	if err := c.Validate(); err != nil {
+		return Config{}, err
+	}
+	return c, nil
 }
 
 // SecureCookies reports whether session cookies must carry the Secure attribute.

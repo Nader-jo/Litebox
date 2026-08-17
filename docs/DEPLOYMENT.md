@@ -48,7 +48,7 @@ less setup.sh
 sudo sh setup.sh
 ```
 
-Useful options are `--version 0.3.0`, `--install-dir /srv/litebox`,
+Useful options are `--version 0.3.1`, `--install-dir /srv/litebox`,
 `--no-start`, and `--reconfigure`. Run `sh setup.sh --help` for the complete
 environment-variable interface used by unattended provisioning.
 
@@ -79,7 +79,7 @@ email. The installer prints exact stop, restart, and deletion commands.
 Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
 
 ```bash
-VERSION=0.3.0 # replace with the current release
+VERSION=0.3.1 # replace with the current release
 install -d -m 0750 /opt/litebox
 cd /opt/litebox
 curl --fail --location --output litebox-vps.tar.gz \
@@ -92,7 +92,7 @@ cp .env.example .env
 chmod 0600 .env
 ```
 
-The bundled `.env.example` pins `LITEBOX_IMAGE` to the same complete release version. Set production values in `.env`. `APP_BASE_URL` must be HTTPS. `RESEND_API_KEY` and `RESEND_WEBHOOK_SECRET` are mandatory in production.
+The bundled `.env.example` pins `LITEBOX_IMAGE` to the same complete release version. Set deployment topology in `.env`; the first-run wizard collects the public URL and provider credentials. On a production volume, Litebox prints a one-time setup URL/token to the container log and keeps `/setup` locked until it is used. Credentials are encrypted with `/data/.litebox/master.key`.
 
 Do not place secrets in `compose.yaml`, shell history, image build arguments, GitHub issues, or logs.
 
@@ -132,6 +132,7 @@ Caddy obtains and renews TLS certificates. The Caddy service is optional infrast
 
 The supplied image and Compose definition:
 
+- use a minimal `scratch` runtime with no shell or package manager;
 - run as UID/GID 10001;
 - drop all capabilities from Litebox;
 - set `no-new-privileges`;
@@ -141,6 +142,10 @@ The supplied image and Compose definition:
 - include OCI source, license, version, revision, and build-date labels;
 - expose a binary healthcheck.
 
+The runtime intentionally has no `/bin/sh`. Run administrative subcommands
+directly, for example `docker compose exec mailbox /app/litebox doctor --deep`,
+instead of opening a shell in the container.
+
 If your platform overrides these controls, preserve write access to `/data` and `/tmp` while keeping `/data/objects` private.
 
 ## Verify image platform and provenance
@@ -148,7 +153,7 @@ If your platform overrides these controls, preserve write access to `/data` and 
 Inspect the published manifest before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.0
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.1
 ```
 
 The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
@@ -157,7 +162,7 @@ If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance atte
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/nader-jo/litebox:0.3.0 \
+  oci://ghcr.io/nader-jo/litebox:0.3.1 \
   --repo Nader-jo/Litebox
 ```
 
@@ -176,7 +181,7 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.0|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.1|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor

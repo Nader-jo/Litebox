@@ -14,9 +14,9 @@ Pushing a signed `v*` tag runs `.github/workflows/release.yml` after tests. The 
 - a multi-platform GHCR image for Linux amd64/arm64;
 - a checksum-pinned `setup.sh` release asset for guided installation and private demo mode;
 - a version-pinned VPS bundle containing the installer, Compose, Caddy, `.env.example`, user/deployment/backup/upgrade guides, and licenses;
-- OCI metadata, BuildKit provenance, an image SBOM, and GitHub/Sigstore image provenance.
+- OCI metadata, BuildKit provenance, an image SBOM, GitHub/Sigstore image provenance, and high/critical vulnerability scans for both platforms.
 
-GoReleaser creates the GitHub release as a draft. The workflow publishes that draft only after the GHCR manifest contains both supported platforms and both published images pass the hardened health smoke test. A container failure therefore cannot advertise a completed GitHub release.
+GoReleaser creates the GitHub release as a draft. The workflow publishes that draft only after the GHCR manifest contains both supported platforms and both published images pass the vulnerability gate and hardened health smoke test. A container failure therefore cannot advertise a completed GitHub release.
 
 GitHub Actions dependencies are pinned to immutable commit SHAs with human-readable version comments. Dependabot proposes updates.
 
@@ -37,14 +37,14 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 Consumers can verify a downloaded archive with GitHub CLI:
 
 ```bash
-gh attestation verify litebox_0.3.0_linux_amd64.tar.gz --repo Nader-jo/Litebox
+gh attestation verify litebox_0.3.1_linux_amd64.tar.gz --repo Nader-jo/Litebox
 ```
 
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.3.0 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.0
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.3.1 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.1
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -54,8 +54,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.3.0 -m "Litebox v0.3.0"
-git push origin v0.3.0
+git tag -s v0.3.1 -m "Litebox v0.3.1"
+git push origin v0.3.1
 ```
 
 ## Release failure
@@ -65,3 +65,9 @@ Do not move or recreate a public version tag. If verification fails while the re
 ## Database compatibility
 
 Every release note must state whether a migration runs and whether rollback requires restoring a backup. The project does not automatically downgrade SQLite schemas.
+
+Version 0.4.0 applies migration `005_settings_digests_colors.sql`. It adds
+installation settings, encrypted provider credential columns, alias colors,
+message-to-alias links, and digest subscriptions. Back up `/data`—including
+`/data/.litebox/master.key`—before upgrading. Restoring the database without
+the matching master key requires entering provider credentials again.

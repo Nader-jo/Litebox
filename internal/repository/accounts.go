@@ -44,8 +44,8 @@ func (r *Repository) EnsureMailbox(ctx context.Context, address, displayName str
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_addresses
-			(id, mailbox_id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`, ids.New(), id, normalized, local, domain, displayName, millis(now), millis(now))
+			(id, mailbox_id, address, local_part, domain, display_name, is_primary, color, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`, ids.New(), id, normalized, local, domain, displayName, colorForAddress(normalized), millis(now), millis(now))
 		return err
 	})
 	return id, err
@@ -54,11 +54,11 @@ func (r *Repository) EnsureMailbox(ctx context.Context, address, displayName str
 func (r *Repository) ensurePrimaryAddress(ctx context.Context, mailboxID, address, local, domain, displayName string) error {
 	now := millis(time.Now())
 	_, err := r.db.ExecContext(ctx, `INSERT INTO mailbox_addresses
-		(id, mailbox_id, address, local_part, domain, display_name, is_primary, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+		(id, mailbox_id, address, local_part, domain, display_name, is_primary, color, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 		ON CONFLICT(address) DO UPDATE SET mailbox_id = excluded.mailbox_id, is_primary = 1,
 			display_name = excluded.display_name, updated_at = excluded.updated_at`,
-		ids.New(), mailboxID, address, local, domain, displayName, now, now)
+		ids.New(), mailboxID, address, local, domain, displayName, colorForAddress(address), now, now)
 	return err
 }
 

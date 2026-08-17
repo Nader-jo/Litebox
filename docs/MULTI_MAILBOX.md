@@ -8,6 +8,7 @@ Litebox is one trusted, self-hosted installation that can contain multiple indep
 - A **session** is one browser/device login for a user. Sessions can be revoked independently.
 - A **mailbox** is an isolated inbox with its own threads, messages, drafts, folders, search, unread state, aliases, and membership list.
 - An **address** is the primary identity or an alias belonging to exactly one mailbox.
+- Every address has a light, editable color. Inbound messages retain the matched address ID, so the conversation badge remains correct even when a mailbox has many aliases.
 - A **membership** grants one user a role in one mailbox. A user can belong to many mailboxes and may have a different role in each.
 
 ## Roles
@@ -53,3 +54,5 @@ Migration `004_multi_mailbox.sql` is automatic and transactional. It:
 No environment change is required. Keep `MAILBOX_PRIMARY_ADDRESS` stable. Values in `MAILBOX_ALLOWED_RECIPIENTS` continue to be ensured as primary-mailbox aliases at startup; removing a value from the environment does not delete a database-managed alias.
 
 Back up `/data` before upgrading and run `litebox doctor --deep` after the first startup on the new version.
+
+After migration, alias colors and runtime settings are stored in SQLite. The environment aliases are used only for the one-time bootstrap import; manage future aliases in **Settings → Mailboxes**.
