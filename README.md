@@ -51,7 +51,7 @@ docker run --rm --name litebox-demo \
   -e APP_ENV=development \
   -e APP_BASE_URL=http://localhost:8080 \
   -v litebox-demo-data:/data \
-  ghcr.io/nader-jo/litebox:0.3.1
+  ghcr.io/nader-jo/litebox:0.4.0
 ```
 
 Open <http://localhost:8080/setup>. Stop the demo with `Ctrl-C`; demo data
@@ -95,7 +95,7 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 ### 1. Pull the multi-platform image
 
 ```bash
-git clone --depth 1 --branch v0.3.1 https://github.com/Nader-jo/Litebox.git
+git clone --depth 1 --branch v0.4.0 https://github.com/Nader-jo/Litebox.git
 cd Litebox
 cp .env.example .env
 docker compose pull
@@ -135,7 +135,7 @@ See [Resend and DNS setup](docs/RESEND_SETUP.md), especially the MX conflict war
 
 ## Operations
 
-Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.3.1`, not `latest`. Each release workflow builds, scans, and boots both supported platforms before publishing the GitHub release.
+Published images are available at `ghcr.io/nader-jo/litebox`. Production deployments should use a complete version tag such as `0.4.0`, not `latest`. Each release workflow builds, scans, and boots both supported platforms before publishing the GitHub release.
 
 The image uses the same binary for the server and all administrative operations:
 

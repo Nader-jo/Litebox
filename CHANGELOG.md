@@ -4,10 +4,6 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
-### Changed
-
-- Make releases image-only: publish one signed GHCR manifest for Linux AMD64 and ARM64 instead of bundling native binaries, installers, or VPS archives.
-
 ## [0.4.0] - 2026-08-17
 
 ### Added
@@ -21,6 +17,7 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 - Existing environment settings are imported once; runtime settings are subsequently managed under Settings → System.
 - Keep only deployment topology (database path, listener, storage paths, and trusted proxies) in environment configuration.
+- Publish one signed GHCR manifest for Linux AMD64 and ARM64 instead of bundling native binaries, installers, or VPS archives.
 
 ### Security
 
@@ -132,7 +129,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Nader-jo/Litebox/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Nader-jo/Litebox/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/Nader-jo/Litebox/compare/v0.2.1...v0.2.2

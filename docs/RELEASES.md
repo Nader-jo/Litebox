@@ -36,8 +36,8 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.3.1 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.3.1
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.4.0 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.4.0
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -47,8 +47,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.3.1 -m "Litebox v0.3.1"
-git push origin v0.3.1
+git tag -s v0.4.0 -m "Litebox v0.4.0"
+git push origin v0.4.0
 ```
 
 ## Release failure

@@ -50,7 +50,7 @@ tag in the existing `.env`, pull it, and restart Compose:
 
 ```bash
 cd /opt/litebox
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.1|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.0|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 ```
