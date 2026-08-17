@@ -4,6 +4,17 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Add digest previews, immediate test delivery, and persisted last-attempt, last-success, count, and error status in Settings → Summary.
+- Add single-use mailbox invitations and password recovery links with hashed, expiring tokens and session revocation after a reset.
+- Preserve mailbox context in URL query parameters so multiple tabs can operate independent mailboxes safely.
+- Show the receiving or sending alias and its light color in thread-list rows as well as conversation messages.
+
+### Security
+
+- Store invitation and password-reset tokens only as hashes and consume them atomically.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added

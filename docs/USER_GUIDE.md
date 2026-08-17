@@ -11,9 +11,18 @@ Litebox email and password. If your account can access several mailboxes, use
 the mailbox selector in the top bar to switch between them. Each mailbox keeps
 its own messages, drafts, unread state, aliases, and membership list.
 
+Mailbox links include the selected mailbox in the URL, so you can keep two
+mailboxes open in separate browser tabs without one tab changing the other.
+
 Use **Settings → Sessions** to review browsers and devices signed in to your
 account. Revoke anything you do not recognize. Revoking the current session
 signs that browser out immediately.
+
+If you forget your password, select **Forgot your password?** on the sign-in
+page. Reset links are single-use and expire after 30 minutes; changing the
+password signs out every existing session. Mailbox invitations are also
+single-use links and expire after 72 hours. An invitation recipient chooses a
+password before access is granted.
 
 ## Understand the folders
 
@@ -109,8 +118,9 @@ body.
 
 - A **mailbox** is an independent inbox and message history.
 - An **alias** receives into one mailbox and can be used as a From identity.
-- Each alias has a light color. The same color appears beside messages received
-  through that address, which makes shared inboxes easy to scan. Owners and
+- Each alias has a light color. The same color appears beside messages and
+  thread-list rows received through that address, which makes shared inboxes
+  easy to scan. Owners and
   administrators can choose a different swatch under **Settings → Mailboxes**.
 - **Owner** and **Admin** can manage mailbox identity, aliases, and people.
 - **Member** can read, organize, and send mail.
@@ -125,7 +135,10 @@ Open **Settings → Summary** to send a count-only report to a private address.
 Choose daily or Monday-only weekly delivery, a time zone, the local send hour,
 and all accessible mailboxes or a selected subset. Reports contain received,
 unread, and sent totals only—never subjects, senders, or message bodies. The
-summary is sent by the primary mailbox and can be disabled at any time.
+summary is sent by the primary mailbox and can be disabled at any time. Use
+**Send test now** to verify delivery immediately; the page also shows the
+preview window, last counts, last successful delivery, and the most recent
+error.
 
 ## When something goes wrong
 

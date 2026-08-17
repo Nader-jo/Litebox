@@ -59,8 +59,9 @@ Do not move or recreate a public version tag. If verification fails while the re
 
 Every release note must state whether a migration runs and whether rollback requires restoring a backup. The project does not automatically downgrade SQLite schemas.
 
-Version 0.4.0 applies migration `005_settings_digests_colors.sql`. It adds
-installation settings, encrypted provider credential columns, alias colors,
-message-to-alias links, and digest subscriptions. Back up `/data`—including
+Version 0.4.0 applies migration `005_settings_digests_colors.sql`. The current
+unreleased v0.4.1 work also applies `006_account_tokens_digest_status.sql`,
+which adds digest delivery status and hashed invitation/password-reset tokens.
+Back up `/data`—including
 `/data/.litebox/master.key`—before upgrading. Restoring the database without
 the matching master key requires entering provider credentials again.

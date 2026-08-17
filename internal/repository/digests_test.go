@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,5 +41,44 @@ func TestDigestSubscriptionAndCountsRespectMailboxScope(t *testing.T) {
 	}
 	if err := repo.MarkDigestSent(ctx, loaded.ID, now); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInvitationAndPasswordResetTokensAreSingleUse(t *testing.T) {
+	ctx := context.Background()
+	repo := testRepository(t)
+	mailboxID, err := repo.EnsureMailbox(ctx, "hello@example.com", "Hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := repo.CreateFirstUser(ctx, "owner@example.com", "Owner", "old-hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invitation, err := repo.CreateInvitation(ctx, owner.ID, mailboxID, "member@example.com", "Member", "member", []byte("invitation-hash"), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invitation.Email != "member@example.com" {
+		t.Fatalf("unexpected invitation: %+v", invitation)
+	}
+	if _, err := repo.AcceptInvitation(ctx, []byte("invitation-hash"), "new-hash"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AcceptInvitation(ctx, []byte("invitation-hash"), "new-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected consumed invitation, got %v", err)
+	}
+	user, err := repo.FindUserByEmail(ctx, "member@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreatePasswordResetForUser(ctx, user.ID, []byte("reset-hash"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ConsumePasswordReset(ctx, []byte("reset-hash"), "replacement-hash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ConsumePasswordReset(ctx, []byte("reset-hash"), "replacement-hash"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected consumed reset token, got %v", err)
 	}
 }

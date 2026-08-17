@@ -81,14 +81,16 @@ func (r *Repository) queryThreadSummaries(ctx context.Context, mailboxID, condit
         SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.thread_id ORDER BY COALESCE(m.received_at, m.sent_at, m.created_at) DESC, m.id DESC) AS rank
         FROM messages m
     )
-    SELECT t.id, t.subject_display, t.latest_message_at, t.message_count, t.unread_count,
-        t.is_archived, t.is_starred, t.is_trashed, l.direction, COALESCE(l.delivery_status, ''),
+	    SELECT t.id, t.subject_display, t.latest_message_at, t.message_count, t.unread_count,
+	        t.is_archived, t.is_starred, t.is_trashed, l.direction, COALESCE(l.delivery_status, ''),
         CASE WHEN l.direction = 'inbound' THEN COALESCE(NULLIF(l.from_name, ''), l.from_address)
              ELSE COALESCE((SELECT GROUP_CONCAT(COALESCE(NULLIF(mr.name, ''), mr.address), ', ')
                             FROM message_recipients mr WHERE mr.message_id = l.id AND mr.recipient_type = 'to'), 'No recipient') END,
-        SUBSTR(REPLACE(REPLACE(l.text_body, CHAR(10), ' '), CHAR(13), ' '), 1, 180),
-        EXISTS(SELECT 1 FROM attachments a WHERE a.message_id = l.id)
-    FROM threads t JOIN latest l ON l.thread_id = t.id AND l.rank = 1
+	        SUBSTR(REPLACE(REPLACE(l.text_body, CHAR(10), ' '), CHAR(13), ' '), 1, 180),
+	        EXISTS(SELECT 1 FROM attachments a WHERE a.message_id = l.id),
+	        COALESCE(ma.address, ''), COALESCE(ma.color, '')
+	    FROM threads t JOIN latest l ON l.thread_id = t.id AND l.rank = 1
+	    LEFT JOIN mailbox_addresses ma ON ma.id = l.mailbox_address_id
 	WHERE t.mailbox_id = ? AND (` + condition + `) ORDER BY t.latest_message_at DESC, t.id DESC LIMIT ?`
 	args = append([]any{mailboxID}, args...)
 	args = append(args, limit)
@@ -104,7 +106,7 @@ func (r *Repository) queryThreadSummaries(ctx context.Context, mailboxID, condit
 		var archived, starred, trashed, hasAttachments int
 		if err := rows.Scan(&summary.ID, &summary.Subject, &latest, &summary.MessageCount, &summary.UnreadCount,
 			&archived, &starred, &trashed, &summary.Direction, &summary.DeliveryStatus, &summary.Participants,
-			&summary.Snippet, &hasAttachments); err != nil {
+			&summary.Snippet, &hasAttachments, &summary.AliasAddress, &summary.AliasColor); err != nil {
 			return nil, err
 		}
 		summary.LatestMessageAt = fromMillis(latest)

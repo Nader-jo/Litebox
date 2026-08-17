@@ -18,9 +18,13 @@ func (r *Repository) GetDigestSubscription(ctx context.Context, userID string) (
 	var sub model.DigestSubscription
 	var enabled int
 	var last sql.NullInt64
+	var attempt, success, windowSince, windowUntil sql.NullInt64
 	err := r.db.QueryRowContext(ctx, `SELECT id, user_id, recipient_email, frequency, timezone,
-		send_hour, mailbox_scope, enabled, last_sent_at FROM digest_subscriptions WHERE user_id = ?`, userID).
-		Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last)
+		send_hour, mailbox_scope, enabled, last_sent_at, last_attempt_at, last_success_at,
+		COALESCE(last_error, ''), last_received, last_unread, last_sent, last_window_since, last_window_until
+		FROM digest_subscriptions WHERE user_id = ?`, userID).
+		Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last,
+			&attempt, &success, &sub.LastError, &sub.LastReceived, &sub.LastUnread, &sub.LastSent, &windowSince, &windowUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.DigestSubscription{}, ErrNotFound
 	}
@@ -32,6 +36,8 @@ func (r *Repository) GetDigestSubscription(ctx context.Context, userID string) (
 		value := fromMillis(last.Int64)
 		sub.LastSentAt = &value
 	}
+	sub.LastAttemptAt, sub.LastSuccessAt = nullableTime(attempt), nullableTime(success)
+	sub.LastWindowSince, sub.LastWindowUntil = nullableTime(windowSince), nullableTime(windowUntil)
 	sub.MailboxIDs, err = r.digestMailboxIDs(ctx, sub.ID)
 	return sub, err
 }
@@ -40,9 +46,13 @@ func (r *Repository) DigestSubscriptionByID(ctx context.Context, id string) (mod
 	var sub model.DigestSubscription
 	var enabled int
 	var last sql.NullInt64
+	var attempt, success, windowSince, windowUntil sql.NullInt64
 	err := r.db.QueryRowContext(ctx, `SELECT id, user_id, recipient_email, frequency, timezone,
-		send_hour, mailbox_scope, enabled, last_sent_at FROM digest_subscriptions WHERE id = ?`, id).
-		Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last)
+		send_hour, mailbox_scope, enabled, last_sent_at, last_attempt_at, last_success_at,
+		COALESCE(last_error, ''), last_received, last_unread, last_sent, last_window_since, last_window_until
+		FROM digest_subscriptions WHERE id = ?`, id).
+		Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last,
+			&attempt, &success, &sub.LastError, &sub.LastReceived, &sub.LastUnread, &sub.LastSent, &windowSince, &windowUntil)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.DigestSubscription{}, ErrNotFound
 	}
@@ -54,6 +64,8 @@ func (r *Repository) DigestSubscriptionByID(ctx context.Context, id string) (mod
 		value := fromMillis(last.Int64)
 		sub.LastSentAt = &value
 	}
+	sub.LastAttemptAt, sub.LastSuccessAt = nullableTime(attempt), nullableTime(success)
+	sub.LastWindowSince, sub.LastWindowUntil = nullableTime(windowSince), nullableTime(windowUntil)
 	sub.MailboxIDs, err = r.digestMailboxIDs(ctx, sub.ID)
 	return sub, err
 }
@@ -146,7 +158,8 @@ func (r *Repository) DisableDigestSubscription(ctx context.Context, userID strin
 // DueDigestSubscriptions returns enabled subscriptions for the scheduler to
 // evaluate in their own timezone.
 func (r *Repository) DueDigestSubscriptions(ctx context.Context) ([]model.DigestSubscription, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id, user_id, recipient_email, frequency, timezone, send_hour, mailbox_scope, enabled, last_sent_at
+	rows, err := r.db.QueryContext(ctx, `SELECT id, user_id, recipient_email, frequency, timezone, send_hour, mailbox_scope, enabled, last_sent_at,
+		last_attempt_at, last_success_at, COALESCE(last_error, ''), last_received, last_unread, last_sent, last_window_since, last_window_until
 		FROM digest_subscriptions WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -156,8 +169,9 @@ func (r *Repository) DueDigestSubscriptions(ctx context.Context) ([]model.Digest
 	for rows.Next() {
 		var sub model.DigestSubscription
 		var enabled int
-		var last sql.NullInt64
-		if err := rows.Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last); err != nil {
+		var last, attempt, success, windowSince, windowUntil sql.NullInt64
+		if err := rows.Scan(&sub.ID, &sub.UserID, &sub.RecipientEmail, &sub.Frequency, &sub.Timezone, &sub.SendHour, &sub.MailboxScope, &enabled, &last,
+			&attempt, &success, &sub.LastError, &sub.LastReceived, &sub.LastUnread, &sub.LastSent, &windowSince, &windowUntil); err != nil {
 			return nil, err
 		}
 		sub.Enabled = enabled != 0
@@ -165,6 +179,8 @@ func (r *Repository) DueDigestSubscriptions(ctx context.Context) ([]model.Digest
 			value := fromMillis(last.Int64)
 			sub.LastSentAt = &value
 		}
+		sub.LastAttemptAt, sub.LastSuccessAt = nullableTime(attempt), nullableTime(success)
+		sub.LastWindowSince, sub.LastWindowUntil = nullableTime(windowSince), nullableTime(windowUntil)
 		sub.MailboxIDs, err = r.digestMailboxIDs(ctx, sub.ID)
 		if err != nil {
 			return nil, err
@@ -217,6 +233,23 @@ func (r *Repository) DigestCounts(ctx context.Context, sub model.DigestSubscript
 }
 
 func (r *Repository) MarkDigestSent(ctx context.Context, subscriptionID string, sentAt time.Time) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE digest_subscriptions SET last_sent_at = ?, updated_at = ? WHERE id = ?", millis(sentAt), millis(time.Now()), subscriptionID)
+	_, err := r.db.ExecContext(ctx, `UPDATE digest_subscriptions SET last_sent_at = ?, last_attempt_at = ?,
+		last_success_at = ?, last_error = '', updated_at = ? WHERE id = ?`, millis(sentAt), millis(sentAt), millis(sentAt), millis(time.Now()), subscriptionID)
+	return err
+}
+
+// MarkDigestAttempt records metadata-only counts and the outcome of a digest
+// delivery attempt. It never stores message content.
+func (r *Repository) MarkDigestAttempt(ctx context.Context, subscriptionID string, counts model.DigestCounts, attemptedAt time.Time, deliveryErr error) error {
+	message := ""
+	if deliveryErr != nil {
+		message = deliveryErr.Error()
+		if len(message) > 500 {
+			message = message[:500]
+		}
+	}
+	_, err := r.db.ExecContext(ctx, `UPDATE digest_subscriptions SET last_attempt_at = ?, last_error = ?,
+		last_received = ?, last_unread = ?, last_sent = ?, last_window_since = ?, last_window_until = ?, updated_at = ? WHERE id = ?`,
+		millis(attemptedAt), message, counts.Received, counts.Unread, counts.Sent, millis(counts.Since), millis(counts.Until), millis(time.Now()), subscriptionID)
 	return err
 }

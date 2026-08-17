@@ -35,6 +35,9 @@ type PageData struct {
 	Sessions          []model.Session
 	CurrentSession    string
 	Digest            model.DigestSubscription
+	DigestPreview     model.DigestCounts
+	DigestPreviewFrom *time.Time
+	DigestPreviewTo   *time.Time
 	DigestMailboxes   []model.Mailbox
 	SettingsSection   string
 	CanManage         bool
@@ -49,6 +52,8 @@ type PageData struct {
 	SetupAPIKey       string
 	SetupWebhook      string
 	SetupDomainID     string
+	Token             string
+	Invitation        model.Invitation
 	RuntimeBaseURL    string
 	RuntimeSessionTTL int
 	RuntimeLogLevel   string
@@ -66,7 +71,38 @@ func threadURL(id string, data PageData) string {
 	if data.SearchQuery != "" {
 		query.Set("q", data.SearchQuery)
 	}
+	query.Set("mailbox", data.Mailbox.ID)
 	return "/threads/" + id + "?" + query.Encode()
+}
+
+// mailboxURL keeps mailbox context in navigable URLs. The cookie remains a
+// convenient fallback, while links can safely be opened in independent tabs.
+func mailboxURL(path string, data PageData) string {
+	if data.Mailbox.ID == "" {
+		return path
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return path
+	}
+	query := parsed.Query()
+	query.Set("mailbox", data.Mailbox.ID)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func digestDate(value *time.Time) string {
+	if value == nil || value.IsZero() {
+		return "—"
+	}
+	return value.Local().Format("Jan 2, 2006 15:04")
+}
+
+func digestPeriod(value model.DigestCounts) string {
+	if value.Since.IsZero() || value.Until.IsZero() {
+		return "No summary data yet"
+	}
+	return fullTime(value.Since) + " – " + fullTime(value.Until)
 }
 
 func backURL(data PageData) string {

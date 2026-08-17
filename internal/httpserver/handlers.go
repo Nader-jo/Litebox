@@ -197,7 +197,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, ui.LoginPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress}))
+	s.render(w, r, http.StatusOK, ui.LoginPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Notice: noticeMessage(r.URL.Query().Get("notice"))}))
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +239,118 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/inbox", http.StatusSeeOther)
 }
 
+func (s *Server) invitationPage(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	invitation, err := s.repository.InvitationByToken(r.Context(), auth.TokenHash(token))
+	if err != nil {
+		s.renderError(w, r, http.StatusNotFound, "This invitation is invalid or has expired.")
+		return
+	}
+	s.render(w, r, http.StatusOK, ui.InvitationPage(ui.PageData{Title: "Accept invitation", Token: token, Invitation: invitation}))
+}
+
+func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	_ = r.ParseForm()
+	token := strings.TrimSpace(r.FormValue("token"))
+	invitation, err := s.repository.InvitationByToken(r.Context(), auth.TokenHash(token))
+	if err != nil {
+		s.renderError(w, r, http.StatusNotFound, "This invitation is invalid or has expired.")
+		return
+	}
+	password := r.FormValue("password")
+	if password != r.FormValue("password_confirmation") {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.InvitationPage(ui.PageData{Title: "Accept invitation", Token: token, Invitation: invitation, Error: "The passwords do not match."}))
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.InvitationPage(ui.PageData{Title: "Accept invitation", Token: token, Invitation: invitation, Error: err.Error()}))
+		return
+	}
+	if _, err := s.repository.AcceptInvitation(r.Context(), auth.TokenHash(token), hash); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			s.renderError(w, r, http.StatusNotFound, "This invitation is invalid or has expired.")
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/login?notice=invitation-accepted", http.StatusSeeOther)
+}
+
+func (s *Server) passwordResetPage(w http.ResponseWriter, r *http.Request) {
+	s.render(w, r, http.StatusOK, ui.PasswordResetPage(ui.PageData{Title: "Reset password", Notice: noticeMessage(r.URL.Query().Get("notice"))}))
+}
+
+func (s *Server) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	_ = r.ParseForm()
+	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
+	key := "password-reset\x00" + s.clientIP(r) + "\x00" + email
+	if !s.login.allow(key) {
+		time.Sleep(250 * time.Millisecond)
+		s.render(w, r, http.StatusTooManyRequests, ui.PasswordResetPage(ui.PageData{Title: "Reset password", Error: "Too many reset requests. Try again later."}))
+		return
+	}
+	s.login.fail(key)
+	if user, err := s.repository.FindUserByEmail(r.Context(), email); err == nil {
+		if token, tokenErr := auth.NewToken(); tokenErr == nil {
+			if createErr := s.repository.CreatePasswordResetForUser(r.Context(), user.ID, auth.TokenHash(token), time.Now().UTC().Add(30*time.Minute)); createErr == nil {
+				resetURL := strings.TrimRight(s.config.BaseURL.String(), "/") + "/password-reset/confirm?token=" + url.QueryEscape(token)
+				if sendErr := s.sendAccountEmail(r.Context(), user.Email, "Reset your Litebox password", fmt.Sprintf("A password reset was requested for your Litebox account.\n\nOpen this link within 30 minutes:\n%s\n\nIf you did not request this, you can ignore this message.", resetURL)); sendErr != nil {
+					s.logger.Error("password reset email failed", "request_id", requestID(r), "error", sendErr)
+				}
+			}
+		}
+	}
+	http.Redirect(w, r, "/password-reset?notice=reset-requested", http.StatusSeeOther)
+}
+
+func (s *Server) passwordResetConfirmPage(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if _, err := s.repository.UserForPasswordReset(r.Context(), auth.TokenHash(token)); err != nil {
+		s.renderError(w, r, http.StatusNotFound, "This password reset link is invalid or has expired.")
+		return
+	}
+	s.render(w, r, http.StatusOK, ui.PasswordResetConfirmPage(ui.PageData{Title: "Choose a new password", Token: token}))
+}
+
+func (s *Server) consumePasswordReset(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	_ = r.ParseForm()
+	token := strings.TrimSpace(r.FormValue("token"))
+	password := r.FormValue("password")
+	if password != r.FormValue("password_confirmation") {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.PasswordResetConfirmPage(ui.PageData{Title: "Choose a new password", Token: token, Error: "The passwords do not match."}))
+		return
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.PasswordResetConfirmPage(ui.PageData{Title: "Choose a new password", Token: token, Error: err.Error()}))
+		return
+	}
+	if err := s.repository.ConsumePasswordReset(r.Context(), auth.TokenHash(token), hash); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			s.renderError(w, r, http.StatusNotFound, "This password reset link is invalid or has expired.")
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/login?notice=password-reset-complete", http.StatusSeeOther)
+}
+
+func (s *Server) sendAccountEmail(ctx context.Context, recipient, subject, body string) error {
+	primary, err := s.repository.PrimaryMailbox(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = s.provider.Send(ctx, provider.SendRequest{From: model.Address{Name: primary.DisplayName, Address: primary.Address},
+		To: []model.Address{{Address: recipient}}, Subject: subject, Text: body, IdempotencyKey: "litebox-account/" + ids.New()})
+	return err
+}
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if cookie, err := r.Cookie(s.config.CookieName); err == nil {
 		_ = s.repository.DeleteSession(r.Context(), auth.TokenHash(cookie.Value))
@@ -259,6 +371,7 @@ func (s *Server) selectMailbox(w http.ResponseWriter, r *http.Request) {
 	if destination == "" || !strings.HasPrefix(destination, "/") || strings.HasPrefix(destination, "//") {
 		destination = "/inbox"
 	}
+	destination = addMailboxQuery(destination, requested)
 	http.Redirect(w, r, destination, http.StatusSeeOther)
 }
 
@@ -327,12 +440,12 @@ func (s *Server) thread(w http.ResponseWriter, r *http.Request) {
 	data.CurrentFolder, data.Threads, data.Thread = folder, threads, &thread
 	data.SearchQuery, data.CurrentCursor = searchQuery, r.URL.Query().Get("cursor")
 	if data.CurrentCursor != "" {
-		data.FirstPageURL = contextListURL(folder, searchQuery, "")
+		data.FirstPageURL = contextListURL(folder, searchQuery, "", mailboxID)
 	}
 	if hasMore && len(threads) > 0 {
-		data.NextPageURL = contextListURL(folder, searchQuery, encodeThreadCursor(threads[len(threads)-1]))
+		data.NextPageURL = contextListURL(folder, searchQuery, encodeThreadCursor(threads[len(threads)-1]), mailboxID)
 	}
-	data.BackURL = contextListURL(folder, searchQuery, data.CurrentCursor)
+	data.BackURL = contextListURL(folder, searchQuery, data.CurrentCursor, mailboxID)
 	s.render(w, r, http.StatusOK, ui.MailboxPage(data))
 }
 
@@ -345,7 +458,7 @@ func (s *Server) threadAction(w http.ResponseWriter, r *http.Request, action str
 	if action == "trash" {
 		destination = "/trash"
 	}
-	http.Redirect(w, r, destination, http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, destination, authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) threadRead(w http.ResponseWriter, r *http.Request, read bool) {
@@ -353,7 +466,7 @@ func (s *Server) threadRead(w http.ResponseWriter, r *http.Request, read bool) {
 		s.repositoryError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/inbox", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/inbox", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) threadDelete(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +474,7 @@ func (s *Server) threadDelete(w http.ResponseWriter, r *http.Request) {
 		s.repositoryError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/trash", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/trash", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
@@ -443,14 +556,14 @@ func (s *Server) createDraft(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
-		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
+		http.Redirect(w, r, requestMailboxURL(r, "/threads/"+threadID+"?folder=sent&notice=message-queued", mailboxID), http.StatusSeeOther)
 		return
 	}
 	if r.FormValue("intent") == "continue" {
-		http.Redirect(w, r, "/drafts/"+created.ID, http.StatusSeeOther)
+		http.Redirect(w, r, requestMailboxURL(r, "/drafts/"+created.ID, mailboxID), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/drafts?notice=draft-saved", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/drafts?notice=draft-saved", mailboxID), http.StatusSeeOther)
 }
 
 func (s *Server) drafts(w http.ResponseWriter, r *http.Request) {
@@ -508,10 +621,10 @@ func (s *Server) saveDraft(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
-		http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
+		http.Redirect(w, r, requestMailboxURL(r, "/threads/"+threadID+"?folder=sent&notice=message-queued", mailboxID), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/drafts?notice=draft-saved", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/drafts?notice=draft-saved", mailboxID), http.StatusSeeOther)
 }
 
 func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
@@ -540,7 +653,7 @@ func (s *Server) sendDraft(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/threads/"+threadID+"?folder=sent&notice=message-queued", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/threads/"+threadID+"?folder=sent&notice=message-queued", mailboxID), http.StatusSeeOther)
 }
 
 func (s *Server) allowSend(w http.ResponseWriter, r *http.Request) bool {
@@ -630,7 +743,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/drafts/"+draftID+"?notice=attachment-added", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/drafts/"+draftID+"?notice=attachment-added", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
@@ -640,7 +753,7 @@ func (s *Server) deleteDraftAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.Delete(r.Context(), key)
-	http.Redirect(w, r, "/drafts/"+r.PathValue("draftID")+"?notice=attachment-removed", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/drafts/"+r.PathValue("draftID")+"?notice=attachment-removed", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
@@ -652,7 +765,7 @@ func (s *Server) deleteDraft(w http.ResponseWriter, r *http.Request) {
 	for _, key := range keys {
 		_ = s.store.Delete(r.Context(), key)
 	}
-	http.Redirect(w, r, "/drafts?notice=draft-discarded", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/drafts?notice=draft-discarded", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) attachment(w http.ResponseWriter, r *http.Request, inline bool) {
@@ -750,7 +863,7 @@ func parseThreadCursor(value string) (time.Time, string, error) {
 	return time.UnixMilli(milliseconds).UTC(), identifier, nil
 }
 
-func contextListURL(folder, rawSearch, cursor string) string {
+func contextListURL(folder, rawSearch, cursor, mailboxID string) string {
 	path := "/" + folder
 	query := url.Values{}
 	if folder == "search" {
@@ -760,10 +873,34 @@ func contextListURL(folder, rawSearch, cursor string) string {
 	if cursor != "" {
 		query.Set("cursor", cursor)
 	}
+	if mailboxID != "" {
+		query.Set("mailbox", mailboxID)
+	}
 	if encoded := query.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
 	return path
+}
+
+func addMailboxQuery(path, mailboxID string) string {
+	if mailboxID == "" {
+		return path
+	}
+	parsed, err := url.Parse(path)
+	if err != nil {
+		return path
+	}
+	query := parsed.Query()
+	query.Set("mailbox", mailboxID)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func requestMailboxURL(r *http.Request, path, mailboxID string) string {
+	if r.URL.Query().Get("mailbox") == "" {
+		return path
+	}
+	return addMailboxQuery(path, mailboxID)
 }
 
 func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
@@ -799,6 +936,14 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data.DigestMailboxes = data.Mailboxes
+		preview := data.Digest
+		if preview.ID == "" {
+			preview.UserID, preview.Frequency, preview.MailboxScope, preview.Timezone = state.Session.User.ID, "daily", "all", "UTC"
+		}
+		previewSince, previewUntil := digestPreviewWindow(preview, time.Now().UTC())
+		if counts, countErr := s.repository.DigestCounts(r.Context(), preview, previewSince, previewUntil); countErr == nil {
+			data.DigestPreview = counts
+		}
 		data.Title, data.SettingsSection = "Email summary", "digest"
 	default:
 		if !data.CanOperateSystem {
@@ -857,7 +1002,37 @@ func (s *Server) updateDigest(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/settings/digest", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/digest", state.Mailbox.ID), http.StatusSeeOther)
+}
+
+func (s *Server) sendDigestTest(w http.ResponseWriter, r *http.Request) {
+	state := authFrom(r)
+	sub, err := s.repository.GetDigestSubscription(r.Context(), state.Session.User.ID)
+	if err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "Save the summary schedule before sending a test.")
+		return
+	}
+	since, until := digestPreviewWindow(sub, time.Now().UTC())
+	if err := s.mailbox.SendDigestPreview(r.Context(), sub, since, until); err != nil {
+		s.logger.Error("digest test failed", "request_id", requestID(r), "error", err)
+		http.Redirect(w, r, requestMailboxURL(r, "/settings/digest?notice=digest-test-failed", state.Mailbox.ID), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/digest?notice=digest-test-sent", state.Mailbox.ID), http.StatusSeeOther)
+}
+
+func digestPreviewWindow(sub model.DigestSubscription, now time.Time) (time.Time, time.Time) {
+	location, err := time.LoadLocation(sub.Timezone)
+	if err != nil {
+		location = time.UTC
+	}
+	local := now.In(location)
+	end := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
+	days := 1
+	if sub.Frequency == "weekly" {
+		days = 7
+	}
+	return end.AddDate(0, 0, -days).UTC(), end.UTC()
 }
 
 func (s *Server) updateSystemSettings(w http.ResponseWriter, r *http.Request) {
@@ -904,7 +1079,7 @@ func (s *Server) updateSystemSettings(w http.ResponseWriter, r *http.Request) {
 	if s.applyConfig != nil {
 		s.applyConfig(next)
 	}
-	http.Redirect(w, r, "/admin/system", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/admin/system", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
@@ -912,7 +1087,7 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/mailboxes", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
@@ -923,7 +1098,7 @@ func (s *Server) createMailbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setMailboxCookie(w, mailbox.ID)
-	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+	http.Redirect(w, r, addMailboxQuery("/settings/mailboxes", mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) addAlias(w http.ResponseWriter, r *http.Request) {
@@ -936,7 +1111,7 @@ func (s *Server) addAlias(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusUnprocessableEntity, "The alias must be a valid, unused email address.")
 		return
 	}
-	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/mailboxes", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
@@ -949,7 +1124,7 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
 		s.repositoryError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/mailboxes", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) updateAliasColor(w http.ResponseWriter, r *http.Request) {
@@ -978,10 +1153,25 @@ func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 	}
 	password := r.FormValue("password")
 	if password == "" {
-		if err := s.repository.GrantMailboxAccess(r.Context(), state.Session.User.ID, state.Mailbox.ID, r.FormValue("email"), role); err != nil {
-			s.renderError(w, r, http.StatusUnprocessableEntity, "No existing enabled user has that email address.")
+		token, err := auth.NewToken()
+		if err != nil {
+			s.internalError(w, r, err)
 			return
 		}
+		invitation, err := s.repository.CreateInvitation(r.Context(), state.Session.User.ID, state.Mailbox.ID, r.FormValue("email"), r.FormValue("display_name"), role, auth.TokenHash(token), time.Now().UTC().Add(72*time.Hour))
+		if err != nil {
+			s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		inviteURL := strings.TrimRight(s.config.BaseURL.String(), "/") + "/invite?token=" + url.QueryEscape(token)
+		body := fmt.Sprintf("You have been invited to %s on Litebox.\n\nAccept the invitation within 72 hours:\n%s\n\nYour mailbox role: %s", invitation.MailboxName, inviteURL, role)
+		if err := s.sendAccountEmail(r.Context(), invitation.Email, "You have been invited to Litebox", body); err != nil {
+			s.logger.Error("invitation email failed", "request_id", requestID(r), "error", err)
+			s.renderError(w, r, http.StatusBadGateway, "The invitation was created but could not be delivered. Check provider settings and try again.")
+			return
+		}
+		http.Redirect(w, r, requestMailboxURL(r, "/settings/people?notice=invitation-sent", state.Mailbox.ID), http.StatusSeeOther)
+		return
 	} else {
 		hash, err := auth.HashPassword(password)
 		if err != nil {
@@ -994,7 +1184,7 @@ func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.Redirect(w, r, "/settings/people", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/people?notice=person-added", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) removeMember(w http.ResponseWriter, r *http.Request) {
@@ -1018,10 +1208,10 @@ func (s *Server) removeMember(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.PathValue("userID") == state.Session.User.ID {
 		s.setMailboxCookie(w, "")
-		http.Redirect(w, r, "/inbox", http.StatusSeeOther)
+		http.Redirect(w, r, requestMailboxURL(r, "/inbox", state.Mailbox.ID), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/settings/people", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/people", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
@@ -1035,7 +1225,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/settings/sessions", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/sessions", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
@@ -1047,7 +1237,7 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 		s.repositoryError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/admin/system", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/admin/system", authFrom(r).Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
@@ -1115,6 +1305,20 @@ func noticeMessage(code string) string {
 		return "Attachment removed"
 	case "draft-discarded":
 		return "Draft discarded"
+	case "digest-test-sent":
+		return "Summary test sent"
+	case "digest-test-failed":
+		return "Summary test could not be delivered"
+	case "password-reset-complete":
+		return "Password updated. Sign in again."
+	case "invitation-accepted":
+		return "Invitation accepted. You can sign in now."
+	case "reset-requested":
+		return "If that email belongs to a Litebox account, a reset link is on its way."
+	case "invitation-sent":
+		return "Invitation sent"
+	case "person-added":
+		return "Person added"
 	default:
 		return ""
 	}

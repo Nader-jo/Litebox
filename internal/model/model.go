@@ -45,6 +45,8 @@ type ThreadSummary struct {
 	HasAttachments  bool
 	Direction       string
 	DeliveryStatus  string
+	AliasAddress    string
+	AliasColor      string
 }
 
 // Thread is a conversation and its ordered messages.
@@ -199,16 +201,37 @@ type MailboxMembership struct {
 
 // DigestSubscription controls one private mailbox activity summary per user.
 type DigestSubscription struct {
-	ID             string
-	UserID         string
-	RecipientEmail string
-	Frequency      string
-	Timezone       string
-	SendHour       int
-	MailboxScope   string
-	MailboxIDs     []string
-	Enabled        bool
-	LastSentAt     *time.Time
+	ID              string
+	UserID          string
+	RecipientEmail  string
+	Frequency       string
+	Timezone        string
+	SendHour        int
+	MailboxScope    string
+	MailboxIDs      []string
+	Enabled         bool
+	LastSentAt      *time.Time
+	LastAttemptAt   *time.Time
+	LastSuccessAt   *time.Time
+	LastError       string
+	LastReceived    int
+	LastUnread      int
+	LastSent        int
+	LastWindowSince *time.Time
+	LastWindowUntil *time.Time
+}
+
+// Invitation is a single-use mailbox access invitation. Raw tokens are never
+// stored; Token is only populated when creating an invitation for delivery.
+type Invitation struct {
+	ID          string
+	Email       string
+	DisplayName string
+	MailboxID   string
+	MailboxName string
+	Role        string
+	ExpiresAt   time.Time
+	Token       string
 }
 
 // DigestMailboxCount is the per-mailbox portion of a summary.

@@ -104,6 +104,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /setup", s.setup)
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("GET /invite", s.invitationPage)
+	mux.HandleFunc("POST /invite", s.acceptInvitation)
+	mux.HandleFunc("GET /password-reset", s.passwordResetPage)
+	mux.HandleFunc("POST /password-reset", s.requestPasswordReset)
+	mux.HandleFunc("GET /password-reset/confirm", s.passwordResetConfirmPage)
+	mux.HandleFunc("POST /password-reset/confirm", s.consumePasswordReset)
 	mux.HandleFunc("POST /webhooks/resend", s.webhook)
 
 	authenticated := func(handler http.HandlerFunc) http.Handler { return s.authenticate(s.csrf(handler)) }
@@ -174,6 +180,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.Handle("POST /settings/system", manageable(s.updateSystemSettings))
 	mux.Handle("POST /settings/profile", manageable(s.updateSettings))
 	mux.Handle("POST /settings/digest", authenticated(s.updateDigest))
+	mux.Handle("POST /settings/digest/test", authenticated(s.sendDigestTest))
 	mux.Handle("POST /mailboxes", manageable(s.createMailbox))
 	mux.Handle("POST /mailboxes/{mailboxID}/aliases", manageable(s.addAlias))
 	mux.Handle("POST /mailboxes/{mailboxID}/aliases/{addressID}/color", manageable(s.updateAliasColor))
@@ -237,16 +244,18 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		if csrfCookie != nil && auth.VerifyToken(csrfCookie.Value, session.CSRFHash) {
 			csrfToken = csrfCookie.Value
 		}
-		preferredMailbox := ""
+		preferredMailbox := strings.TrimSpace(r.URL.Query().Get("mailbox"))
 		if mailboxCookie, cookieErr := r.Cookie(s.config.CookieName + "_mailbox"); cookieErr == nil {
-			preferredMailbox = mailboxCookie.Value
+			if preferredMailbox == "" {
+				preferredMailbox = mailboxCookie.Value
+			}
 		}
 		mailbox, err := s.repository.MailboxForUser(r.Context(), session.User.ID, preferredMailbox)
 		if err != nil {
 			s.renderError(w, r, http.StatusForbidden, "Your account does not have access to a mailbox.")
 			return
 		}
-		if preferredMailbox != mailbox.ID {
+		if r.URL.Query().Get("mailbox") == "" && preferredMailbox != mailbox.ID {
 			s.setMailboxCookie(w, mailbox.ID)
 		}
 		state := authState{Session: session, CSRFToken: csrfToken, Mailbox: mailbox}

@@ -32,7 +32,10 @@ If one provider email targets aliases of the same mailbox, Litebox stores one me
 
 ## Authorization boundary
 
-The active mailbox is held in an HttpOnly preference cookie for convenient switching. The cookie is not trusted and does not grant access. On every authenticated request Litebox:
+The active mailbox is carried in URL query parameters for navigable links (for
+example, `/inbox?mailbox=<id>`), with an HttpOnly preference cookie retained as
+a convenient fallback. This lets separate tabs keep different mailboxes open.
+The cookie is not trusted and does not grant access. On every authenticated request Litebox:
 
 1. loads the user session from its hashed token;
 2. resolves the requested mailbox through `mailbox_memberships`;

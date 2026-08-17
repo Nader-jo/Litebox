@@ -298,22 +298,44 @@ func (s *Mailbox) SendDigest(ctx context.Context, subscriptionID string, since, 
 	if err != nil {
 		return err
 	}
+	if err := s.repository.MarkDigestAttempt(ctx, sub.ID, counts, time.Now().UTC(), nil); err != nil {
+		return err
+	}
+	err = s.sendDigest(ctx, sub, counts, "Litebox mailbox summary")
+	if err != nil {
+		_ = s.repository.MarkDigestAttempt(ctx, sub.ID, counts, time.Now().UTC(), err)
+		return err
+	}
+	return s.repository.MarkDigestSent(ctx, sub.ID, until)
+}
+
+// SendDigestPreview sends the same metadata-only report immediately without
+// changing the subscription schedule or last successful delivery timestamp.
+func (s *Mailbox) SendDigestPreview(ctx context.Context, sub model.DigestSubscription, since, until time.Time) error {
+	counts, err := s.repository.DigestCounts(ctx, sub, since, until)
+	if err != nil {
+		return err
+	}
+	return s.sendDigest(ctx, sub, counts, "Litebox mailbox summary preview")
+}
+
+func (s *Mailbox) sendDigest(ctx context.Context, sub model.DigestSubscription, counts model.DigestCounts, subject string) error {
 	primary, err := s.repository.PrimaryMailbox(ctx)
 	if err != nil {
 		return err
 	}
 	body := fmt.Sprintf("Litebox mailbox summary\n\nPeriod: %s – %s\nReceived: %d\nUnread: %d\nSent: %d\n\n",
-		since.In(time.Local).Format("Jan 2, 2006 15:04"), until.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Received, counts.Unread, counts.Sent)
+		counts.Since.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Until.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Received, counts.Unread, counts.Sent)
 	for _, mailbox := range counts.ByMailbox {
 		body += fmt.Sprintf("%s — received %d, unread %d, sent %d\n", mailbox.Address, mailbox.Received, mailbox.Unread, mailbox.Sent)
 	}
 	_, err = s.provider.Send(ctx, provider.SendRequest{From: model.Address{Name: primary.DisplayName, Address: primary.Address},
-		To: []model.Address{{Address: sub.RecipientEmail}}, Subject: "Litebox mailbox summary", Text: body,
-		Headers: map[string]string{"X-Litebox-Digest": "1"}, IdempotencyKey: "litebox-digest/" + sub.ID + "/" + fmt.Sprint(until.Unix())})
+		To: []model.Address{{Address: sub.RecipientEmail}}, Subject: subject, Text: body,
+		Headers: map[string]string{"X-Litebox-Digest": "1"}, IdempotencyKey: "litebox-digest/" + sub.ID + "/" + fmt.Sprint(counts.Until.Unix())})
 	if err != nil {
 		return err
 	}
-	return s.repository.MarkDigestSent(ctx, sub.ID, until)
+	return nil
 }
 
 type providerEventPayload struct {

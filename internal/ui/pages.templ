@@ -32,6 +32,13 @@ templ Brand() {
 	</a>
 }
 
+templ MailboxBrand(data PageData) {
+	<a class="brand" href={ templ.SafeURL(mailboxURL("/inbox", data)) } aria-label="Litebox inbox">
+		<span class="brand-mark" aria-hidden="true">@Icon("mail")</span>
+		<span>Litebox</span>
+	</a>
+}
+
 templ LoginPage(data PageData) {
 	@Document("Sign in", LoginBody(data))
 }
@@ -48,14 +55,71 @@ templ LoginBody(data PageData) {
 			if data.Error != "" {
 				<div class="alert alert-error" role="alert">{ data.Error }</div>
 			}
+			if data.Notice != "" {
+				<div class="alert alert-success" role="status">{ data.Notice }</div>
+			}
 			<form method="post" action="/login" class="stack">
 				<label>Email<input name="email" type="email" autocomplete="username" required autofocus/></label>
 				<label>Password<input name="password" type="password" autocomplete="current-password" required/></label>
 				<button class="button button-primary button-wide" type="submit">Sign in</button>
 			</form>
+			<p class="auth-links"><a href="/password-reset">Forgot your password?</a></p>
 			<p class="auth-note">One small mailbox. No tracking, no ads, no mail server to operate.</p>
 		</main>
 	</body>
+}
+
+templ InvitationPage(data PageData) {
+	@Document("Accept invitation", InvitationBody(data))
+}
+
+templ InvitationBody(data PageData) {
+	<body class="auth-page"><main class="auth-card">
+		@Brand()
+		<div class="auth-copy"><p class="eyebrow">Mailbox invitation</p><h1>Join { data.Invitation.MailboxName }</h1><p>Set a password to accept access for { data.Invitation.Email }.</p></div>
+		if data.Error != "" {
+			<div class="alert alert-error" role="alert">{ data.Error }</div>
+		}
+		<form method="post" action="/invite" class="stack"><input type="hidden" name="token" value={ data.Token }/>
+			<label>Password<input name="password" type="password" autocomplete="new-password" minlength="12" required autofocus/><small>At least 12 characters.</small></label>
+			<label>Confirm password<input name="password_confirmation" type="password" autocomplete="new-password" minlength="12" required/></label>
+			<button class="button button-primary button-wide" type="submit">Accept invitation</button>
+		</form>
+	</main></body>
+}
+
+templ PasswordResetPage(data PageData) {
+	@Document("Reset password", PasswordResetBody(data))
+}
+
+templ PasswordResetBody(data PageData) {
+	<body class="auth-page"><main class="auth-card">
+		@Brand()
+		<div class="auth-copy"><p class="eyebrow">Account recovery</p><h1>Reset your password</h1><p>Enter your account email and we’ll send a single-use reset link.</p></div>
+		if data.Error != "" {
+			<div class="alert alert-error" role="alert">{ data.Error }</div>
+		}
+		if data.Notice != "" {
+			<div class="alert alert-success" role="status">{ data.Notice }</div>
+		}
+		<form method="post" action="/password-reset" class="stack"><label>Email<input name="email" type="email" autocomplete="username" required autofocus/></label><button class="button button-primary button-wide" type="submit">Email reset link</button></form>
+		<p class="auth-links"><a href="/login">Return to sign in</a></p>
+	</main></body>
+}
+
+templ PasswordResetConfirmPage(data PageData) {
+	@Document("Choose a new password", PasswordResetConfirmBody(data))
+}
+
+templ PasswordResetConfirmBody(data PageData) {
+	<body class="auth-page"><main class="auth-card">
+		@Brand()
+		<div class="auth-copy"><p class="eyebrow">Account recovery</p><h1>Choose a new password</h1><p>Your reset link is valid for 30 minutes.</p></div>
+		if data.Error != "" {
+			<div class="alert alert-error" role="alert">{ data.Error }</div>
+		}
+		<form method="post" action="/password-reset/confirm" class="stack"><input type="hidden" name="token" value={ data.Token }/><label>New password<input name="password" type="password" autocomplete="new-password" minlength="12" required autofocus/></label><label>Confirm password<input name="password_confirmation" type="password" autocomplete="new-password" minlength="12" required/></label><button class="button button-primary button-wide" type="submit">Update password</button></form>
+	</main></body>
 }
 
 templ SetupPage(data PageData) {
@@ -100,9 +164,10 @@ templ MailboxBody(data PageData) {
 		<meta name="csrf-token" content={ data.CSRFToken }/>
 		<header class="topbar">
 			<button class="icon-button menu-button" type="button" data-sidebar-toggle aria-label="Open navigation" aria-controls="mailbox-navigation" aria-expanded="false">@Icon("menu")</button>
-			@Brand()
+			@MailboxBrand(data)
 			<form class="search" id="global-search" method="get" action="/search" role="search" data-global-search>
 				@Icon("search")
+				<input type="hidden" name="mailbox" value={ data.Mailbox.ID }/>
 				<input name="q" value={ data.SearchQuery } placeholder="Search mail…" aria-label="Search mail" autocomplete="off" data-search-input/>
 				<kbd class="search-shortcut" aria-hidden="true">/</kbd>
 			</form>
@@ -153,7 +218,7 @@ templ MailboxBody(data PageData) {
 templ Sidebar(data PageData) {
 	<aside class="sidebar" id="mailbox-navigation" data-sidebar>
 		if data.CanWrite {
-			<a class="compose-button" href="/compose" aria-keyshortcuts="c">@Icon("plus")<span>Compose</span><kbd aria-hidden="true">C</kbd></a>
+			<a class="compose-button" href={ templ.SafeURL(mailboxURL("/compose", data)) } aria-keyshortcuts="c">@Icon("plus")<span>Compose</span><kbd aria-hidden="true">C</kbd></a>
 		} else {
 			<div class="read-only-pill">Read-only access</div>
 		}
@@ -166,7 +231,7 @@ templ Sidebar(data PageData) {
 			@NavItem("/trash", "trash", "Trash", "trash", data)
 		</nav>
 		<div class="sidebar-footer">
-			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href="/settings/mailboxes">@Icon("settings")<span>Settings</span></a>
+			<a class={ "nav-item", templ.KV("active", data.CurrentFolder == "admin") } href={ templ.SafeURL(mailboxURL("/settings/mailboxes", data)) }>@Icon("settings")<span>Settings</span></a>
 			<button class="sidebar-help" type="button" data-shortcuts-open>@Icon("keyboard")<span>Keyboard shortcuts</span><kbd aria-hidden="true">?</kbd></button>
 			<div class="storage-pill"><span class="status-dot"></span> Local-first storage</div>
 		</div>
@@ -174,7 +239,7 @@ templ Sidebar(data PageData) {
 }
 
 templ NavItem(href string, key string, label string, icon string, data PageData) {
-	<a class={ "nav-item", templ.KV("active", data.CurrentFolder == key) } href={ templ.SafeURL(href) }>@Icon(icon)<span>{ label }</span></a>
+	<a class={ "nav-item", templ.KV("active", data.CurrentFolder == key) } href={ templ.SafeURL(mailboxURL(href, data)) }>@Icon(icon)<span>{ label }</span></a>
 }
 
 templ MailboxWorkspace(data PageData) {
@@ -184,7 +249,7 @@ templ MailboxWorkspace(data PageData) {
 			<span class="count">{ fmt.Sprintf("%d", len(data.Threads)) }</span>
 		</div>
 		if len(data.Threads) == 0 {
-			@EmptyMailbox(data.CurrentFolder, data.CanWrite)
+			@EmptyMailboxScoped(data)
 		} else {
 			<div class="thread-list">
 				for _, item := range data.Threads {
@@ -214,9 +279,12 @@ templ MailboxWorkspace(data PageData) {
 
 templ ThreadRow(item model.ThreadSummary, data PageData) {
 	<a href={ templ.SafeURL(threadURL(item.ID, data)) } class={ "thread-row", templ.KV("unread", item.UnreadCount > 0), templ.KV("selected", data.Thread != nil && data.Thread.ID == item.ID) } data-thread-row>
-		<div class="thread-row-top"><strong>{ item.Participants }</strong><time datetime={ item.LatestMessageAt.Format(time.RFC3339) }>{ relativeTime(item.LatestMessageAt) }</time></div>
+	<div class="thread-row-top"><strong>{ item.Participants }</strong><time datetime={ item.LatestMessageAt.Format(time.RFC3339) }>{ relativeTime(item.LatestMessageAt) }</time></div>
 		<div class="thread-subject">
 			<span>{ displaySubject(item.Subject) }</span>
+			if item.AliasAddress != "" {
+				<span class="alias-pill thread-alias" style={ "background-color: " + item.AliasColor }>@Icon("mail")<span>{ item.AliasAddress }</span></span>
+			}
 			if item.IsStarred {
 				<span class="star" aria-label="Starred">@Icon("star")</span>
 			}
@@ -239,7 +307,15 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 templ EmptyMailbox(folder string, canWrite bool) {
 	<div class="empty-state"><div class="empty-icon">@Icon("mail")</div><h2>No { folderTitle(folder) } mail</h2><p>Your mailbox is wonderfully quiet.</p>
 		if canWrite {
-			<a class="button button-secondary" href="/compose">Write a message</a>
+				<a class="button button-secondary" href="/compose">Write a message</a>
+		}
+	</div>
+}
+
+templ EmptyMailboxScoped(data PageData) {
+	<div class="empty-state"><div class="empty-icon">@Icon("mail")</div><h2>No { folderTitle(data.CurrentFolder) } mail</h2><p>Your mailbox is wonderfully quiet.</p>
+		if data.CanWrite {
+			<a class="button button-secondary" href={ templ.SafeURL(mailboxURL("/compose", data)) }>Write a message</a>
 		}
 	</div>
 }
@@ -251,41 +327,41 @@ templ ReaderEmpty() {
 templ Conversation(thread model.Thread, data PageData) {
 	<div class="conversation">
 		<div class="conversation-toolbar">
-			<a class="icon-button back-button" href={ templ.SafeURL(backURL(data)) } aria-label="Back">@Icon("arrow-left")</a>
+			<a class="icon-button back-button" href={ templ.SafeURL(mailboxURL(backURL(data), data)) } aria-label="Back">@Icon("arrow-left")</a>
 			if data.CanWrite && thread.IsTrashed {
-				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/restore") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Restore</button></form>
-				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Delete forever</button></form>
+				<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/restore", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Restore</button></form>
+				<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/delete", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Delete forever</button></form>
 			} else if data.CanWrite {
 				if thread.IsArchived {
-					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unarchive") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Move to Inbox</button></form>
+					<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/unarchive", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Move to Inbox</button></form>
 				} else {
-					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/archive") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Archive</button></form>
+					<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/archive", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Archive</button></form>
 				}
 				if thread.IsStarred {
-					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unstar") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unstar</button></form>
+					<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/unstar", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unstar</button></form>
 				} else {
-					<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/star") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Star</button></form>
+					<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/star", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Star</button></form>
 				}
-				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/unread") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unread</button></form>
-				<form method="post" action={ templ.SafeURL("/threads/" + thread.ID + "/trash") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Trash</button></form>
+				<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/unread", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button" type="submit">Unread</button></form>
+				<form method="post" action={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/trash", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="toolbar-button danger" type="submit">Trash</button></form>
 			}
 		</div>
 		<header class="conversation-header"><p class="eyebrow">{ fmt.Sprintf("%d messages", len(thread.Messages)) }</p><h1>{ displaySubject(thread.Subject) }</h1></header>
 		<div class="message-stack">
 			for _, message := range thread.Messages {
-				@MessageCard(message)
+				@MessageCard(message, data)
 			}
 		</div>
 		if data.CanWrite {
 			<div class="reply-bar">
-				<a class="button button-primary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply") } aria-keyshortcuts="r" data-shortcut-reply>@Icon("reply") Reply</a>
-				<a class="button button-secondary" href={ templ.SafeURL("/threads/" + thread.ID + "/reply-all") }>Reply all</a>
+				<a class="button button-primary" href={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/reply", data)) } aria-keyshortcuts="r" data-shortcut-reply>@Icon("reply") Reply</a>
+				<a class="button button-secondary" href={ templ.SafeURL(mailboxURL("/threads/" + thread.ID + "/reply-all", data)) }>Reply all</a>
 			</div>
 		}
 	</div>
 }
 
-templ MessageCard(message model.Message) {
+templ MessageCard(message model.Message, data PageData) {
 	<article class="message-card">
 		<header>
 			<span class="avatar avatar-message">{ fmt.Sprintf("%.1s", message.From.Name + message.From.Address) }</span>
@@ -299,7 +375,7 @@ templ MessageCard(message model.Message) {
 				</strong>
 				<small>{ message.From.Address }</small>
 				if message.AliasAddress != "" {
-					<span class="alias-pill" style={ "background-color: " + message.AliasColor }>@Icon("mail") { message.AliasAddress }</span>
+					<span class="alias-pill" style={ "background-color: " + message.AliasColor }>@Icon("mail")<span>{ message.AliasAddress }</span></span>
 				}
 			</div>
 			<div class="message-time">
@@ -331,7 +407,7 @@ templ MessageCard(message model.Message) {
 			<div class="attachments">
 				for _, attachment := range message.Attachments {
 					if attachment.StorageStatus == "ready" {
-						<a href={ templ.SafeURL("/attachments/" + attachment.ID) }><span>@Icon("paperclip")</span><span><strong>{ attachment.Filename }</strong><small>{ byteSize(attachment.SizeBytes) } · { attachment.ContentType }</small></span></a>
+						<a href={ templ.SafeURL(mailboxURL("/attachments/" + attachment.ID, data)) }><span>@Icon("paperclip")</span><span><strong>{ attachment.Filename }</strong><small>{ byteSize(attachment.SizeBytes) } · { attachment.ContentType }</small></span></a>
 					} else {
 						<div class="attachment-unavailable" role="status"><span>!</span><span><strong>{ attachment.Filename }</strong><small>Attachment archival failed; retry details are available in System.</small></span></div>
 					}
@@ -346,11 +422,11 @@ templ MessageCard(message model.Message) {
 
 templ Composer(data PageData, draft model.Draft) {
 	<section class="composer-page">
-		<div class="section-header"><div><p class="eyebrow">Draft</p><h1>New message</h1></div><a class="icon-button" href="/drafts" aria-label="Close composer">@Icon("close")</a></div>
+		<div class="section-header"><div><p class="eyebrow">Draft</p><h1>New message</h1></div><a class="icon-button" href={ templ.SafeURL(mailboxURL("/drafts", data)) } aria-label="Close composer">@Icon("close")</a></div>
 		if draft.ID != "" {
-			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL("/drafts/" + draft.ID + "/attachments") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">@Icon("paperclip") Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
+			<form class="upload-form" method="post" enctype="multipart/form-data" action={ templ.SafeURL(mailboxURL("/drafts/" + draft.ID + "/attachments", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label class="button button-ghost">@Icon("paperclip") Add attachment<input class="visually-hidden" type="file" name="attachment" data-auto-submit/></label></form>
 		}
-		<form class="composer-form" method="post" action={ templ.SafeURL(draftAction(draft.ID)) } data-compose-form>
+		<form class="composer-form" method="post" action={ templ.SafeURL(mailboxURL(draftAction(draft.ID), data)) } data-compose-form>
 			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<input type="hidden" name="thread_id" value={ draft.ThreadID }/>
 			<input type="hidden" name="reply_to_message_id" value={ draft.ReplyToMessageID }/>
@@ -368,13 +444,13 @@ templ Composer(data PageData, draft model.Draft) {
 			if len(draft.Attachments) > 0 {
 				<div class="draft-attachments">
 					for _, attachment := range draft.Attachments {
-						<span>@Icon("paperclip") { attachment.Filename } <small>{ byteSize(attachment.SizeBytes) }</small><button class="attachment-remove" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/attachments/" + attachment.ID + "/delete") } aria-label={ "Remove " + attachment.Filename }>@Icon("close")</button></span>
+						<span>@Icon("paperclip") { attachment.Filename } <small>{ byteSize(attachment.SizeBytes) }</small><button class="attachment-remove" type="submit" formaction={ templ.SafeURL(mailboxURL("/drafts/" + draft.ID + "/attachments/" + attachment.ID + "/delete", data)) } aria-label={ "Remove " + attachment.Filename }>@Icon("close")</button></span>
 					}
 				</div>
 			}
 			<div class="composer-actions">
 				if draft.ID != "" {
-					<button class="button button-ghost danger" type="submit" formaction={ templ.SafeURL("/drafts/" + draft.ID + "/delete") } data-confirm="Discard this draft and its attachments? This cannot be undone.">Discard draft</button>
+					<button class="button button-ghost danger" type="submit" formaction={ templ.SafeURL(mailboxURL("/drafts/" + draft.ID + "/delete", data)) } data-confirm="Discard this draft and its attachments? This cannot be undone.">Discard draft</button>
 				} else {
 					<button class="button button-ghost" type="submit" name="intent" value="continue">Save to add files</button>
 				}
@@ -392,7 +468,7 @@ templ DraftList(data PageData) {
 		} else {
 			<div class="draft-list">
 				for _, draft := range data.Drafts {
-					<a href={ templ.SafeURL("/drafts/" + draft.ID) }><strong>{ firstRecipient(draft.To) }</strong><span>{ displaySubject(draft.Subject) }</span><p>{ draft.TextBody }</p><time>{ relativeTime(draft.UpdatedAt) }</time></a>
+					<a href={ templ.SafeURL(mailboxURL("/drafts/" + draft.ID, data)) }><strong>{ firstRecipient(draft.To) }</strong><span>{ displaySubject(draft.Subject) }</span><p>{ draft.TextBody }</p><time>{ relativeTime(draft.UpdatedAt) }</time></a>
 				}
 			</div>
 		}
@@ -437,14 +513,14 @@ templ AdminPanel(data PageData) {
 
 templ SettingsNav(data PageData) {
 	<nav class="settings-nav" aria-label="Settings sections">
-		<a class={ templ.KV("active", data.SettingsSection == "mailboxes") } href="/settings/mailboxes">@Icon("mail") Mailboxes</a>
+		<a class={ templ.KV("active", data.SettingsSection == "mailboxes") } href={ templ.SafeURL(mailboxURL("/settings/mailboxes", data)) }>@Icon("mail") Mailboxes</a>
 		if data.CanManage {
-			<a class={ templ.KV("active", data.SettingsSection == "people") } href="/settings/people">@Icon("users") People</a>
+			<a class={ templ.KV("active", data.SettingsSection == "people") } href={ templ.SafeURL(mailboxURL("/settings/people", data)) }>@Icon("users") People</a>
 		}
-		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href="/settings/sessions">@Icon("sessions") Sessions</a>
-		<a class={ templ.KV("active", data.SettingsSection == "digest") } href="/settings/digest">@Icon("mail") Summary</a>
+		<a class={ templ.KV("active", data.SettingsSection == "sessions") } href={ templ.SafeURL(mailboxURL("/settings/sessions", data)) }>@Icon("sessions") Sessions</a>
+		<a class={ templ.KV("active", data.SettingsSection == "digest") } href={ templ.SafeURL(mailboxURL("/settings/digest", data)) }>@Icon("mail") Summary</a>
 		if data.CanOperateSystem {
-			<a class={ templ.KV("active", data.SettingsSection == "system") } href="/admin/system">@Icon("health") System</a>
+			<a class={ templ.KV("active", data.SettingsSection == "system") } href={ templ.SafeURL(mailboxURL("/admin/system", data)) }>@Icon("health") System</a>
 		}
 	</nav>
 }
@@ -453,7 +529,15 @@ templ DigestSettings(data PageData) {
 	<div class="admin-section">
 		<h2>Private email summary</h2>
 		<p class="section-copy">Receive a small metadata-only report with received, unread, and sent counts. Message subjects and bodies are never included.</p>
-		<form class="settings-form" method="post" action="/settings/digest">
+		<div class="digest-status-card">
+			<div><span class="eyebrow">Last delivery</span><strong>{ digestDate(data.Digest.LastSuccessAt) }</strong></div>
+			<div><span class="eyebrow">Last attempt</span><strong>{ digestDate(data.Digest.LastAttemptAt) }</strong></div>
+			<div><span class="eyebrow">Last counts</span><strong>{ fmt.Sprintf("%d received · %d unread · %d sent", data.Digest.LastReceived, data.Digest.LastUnread, data.Digest.LastSent) }</strong></div>
+		</div>
+		if data.Digest.LastError != "" {
+			<div class="alert alert-error" role="alert">The last summary could not be delivered: { data.Digest.LastError }</div>
+		}
+		<form class="settings-form" method="post" action={ templ.SafeURL(mailboxURL("/settings/digest", data)) }>
 			<input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<label>Send summary to<input name="recipient_email" type="email" value={ data.Digest.RecipientEmail } placeholder={ data.User.Email } required/></label>
 			<label>Frequency<select name="frequency"><option value="daily" selected?={ data.Digest.Frequency == "" || data.Digest.Frequency == "daily" }>Daily</option><option value="weekly" selected?={ data.Digest.Frequency == "weekly" }>Weekly (Monday)</option></select></label>
@@ -466,8 +550,14 @@ templ DigestSettings(data PageData) {
 				}
 			</div>
 			<label class="checkbox-label"><input type="checkbox" name="enabled" checked?={ data.Digest.ID == "" || data.Digest.Enabled }/> Enable summary</label>
-			<button class="button button-primary" type="submit">Save summary schedule</button>
+			<div class="form-actions"><button class="button button-primary" type="submit">Save summary schedule</button><button class="button button-secondary" type="submit" formaction={ templ.SafeURL(mailboxURL("/settings/digest/test", data)) }>Send test now</button></div>
 		</form>
+	</div>
+	<div class="admin-section">
+		<h2>Preview</h2>
+		<p class="section-copy">A metadata-only preview of the most recently completed { data.Digest.Frequency } window.</p>
+		<div class="stat-grid digest-preview"><div><small>Received</small><strong>{ fmt.Sprintf("%d", data.DigestPreview.Received) }</strong></div><div><small>Unread</small><strong>{ fmt.Sprintf("%d", data.DigestPreview.Unread) }</strong></div><div><small>Sent</small><strong>{ fmt.Sprintf("%d", data.DigestPreview.Sent) }</strong></div></div>
+		<p class="table-subtitle">Window: { digestPeriod(data.DigestPreview) }</p>
 	</div>
 }
 
@@ -475,7 +565,7 @@ templ MailboxSettings(data PageData) {
 	<div class="admin-section">
 		<h2>Mailbox identity</h2>
 		if data.CanManage {
-			<form class="settings-form" method="post" action="/settings/profile"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Display name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><label>Primary address<input value={ data.PrimaryAddress } disabled/></label><button class="button button-secondary" type="submit">Save profile</button></form>
+			<form class="settings-form" method="post" action={ templ.SafeURL(mailboxURL("/settings/profile", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Display name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><label>Primary address<input value={ data.PrimaryAddress } disabled/></label><button class="button button-secondary" type="submit">Save profile</button></form>
 		} else {
 			<dl class="detail-list"><dt>Display name</dt><dd>{ data.MailboxName }</dd><dt>Primary address</dt><dd>{ data.PrimaryAddress }</dd></dl>
 		}
@@ -493,26 +583,26 @@ templ MailboxSettings(data PageData) {
 						<small>{ address.DisplayName }</small>
 					</span>
 					if data.CanManage {
-						<form class="alias-color-form" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/color") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label><span class="sr-only">Color for { address.Address }</span><select name="color" aria-label={ "Color for " + address.Address } style={ "background-color: " + address.Color } data-auto-submit>
+						<form class="alias-color-form" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/color", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label><span class="sr-only">Color for { address.Address }</span><select name="color" aria-label={ "Color for " + address.Address } style={ "background-color: " + address.Color } data-auto-submit>
 							for _, color := range aliasPalette() {
 								<option value={ color } style={ "background-color: " + color } selected?={ color == address.Color }>{ color }</option>
 							}
 						</select></label></form>
 						if !address.IsPrimary {
-							<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this alias? New mail to it will no longer be accepted.">Remove</button></form>
+							<form method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/delete", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this alias? New mail to it will no longer be accepted.">Remove</button></form>
 						}
 					}
 				</div>
 			}
 		</div>
 		if data.CanManage {
-			<form class="settings-form inline-settings" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/aliases") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>New alias<input name="address" type="email" placeholder="support@example.com" required/></label><label>Sender name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><button class="button button-secondary" type="submit">Add alias</button></form>
+			<form class="settings-form inline-settings" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/aliases", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>New alias<input name="address" type="email" placeholder="support@example.com" required/></label><label>Sender name<input name="display_name" value={ data.MailboxName } maxlength="128" required/></label><button class="button button-secondary" type="submit">Add alias</button></form>
 		}
 	</div>
 	if data.CanManage {
 		<div class="admin-section">
 			<h2>Create another mailbox</h2><p class="section-copy">Independent mailboxes keep their own inbox, drafts, search, unread state, aliases, and membership list.</p>
-			<form class="settings-form inline-settings" method="post" action="/mailboxes"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Primary address<input name="address" type="email" placeholder="billing@example.com" required/></label><label>Display name<input name="display_name" maxlength="128" required/></label><button class="button button-primary" type="submit">Create mailbox</button></form>
+			<form class="settings-form inline-settings" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label>Primary address<input name="address" type="email" placeholder="billing@example.com" required/></label><label>Display name<input name="display_name" maxlength="128" required/></label><button class="button button-primary" type="submit">Create mailbox</button></form>
 		</div>
 	}
 }
@@ -530,17 +620,17 @@ templ PeopleSettings(data PageData) {
 					}
 				</td><td>
 					if membership.User.ID != data.User.ID || membership.Role != "owner" {
-						<form method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/members/" + membership.User.ID + "/delete") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this person from the mailbox?">Remove</button></form>
+						<form method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/members/" + membership.User.ID + "/delete", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button danger" type="submit" data-confirm="Remove this person from the mailbox?">Remove</button></form>
 					}
 				</td></tr>
 			}
 		</tbody></table></div>
 	</div>
 	<div class="admin-section">
-		<h2>Add a person</h2><p class="section-copy">Enter a password to create a new administrator login. Leave it blank to grant access to an existing Litebox user.</p>
-		<form class="settings-form" method="post" action={ templ.SafeURL("/mailboxes/" + data.Mailbox.ID + "/members") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+		<h2>Invite a person</h2><p class="section-copy">Send a single-use invitation link. The recipient chooses their own password and the link expires after 72 hours.</p>
+		<form class="settings-form" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/members", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<div class="field-grid"><label>Email<input name="email" type="email" required/></label><label>Display name<input name="display_name" maxlength="128"/></label></div>
-			<div class="field-grid"><label>Initial password<input name="password" type="password" minlength="12" autocomplete="new-password"/><small>Required only for a new user.</small></label><label>Role<select name="role"><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option>
+			<div class="field-grid"><label>Initial password (optional)<input name="password" type="password" minlength="12" autocomplete="new-password"/><small>Leave blank to send an invitation.</small></label><label>Role<select name="role"><option value="admin">Admin</option><option value="member">Member</option><option value="viewer">Viewer</option>
 				if data.Mailbox.Role == "owner" {
 					<option value="owner">Owner</option>
 				}
@@ -570,7 +660,7 @@ templ SessionSettings(data PageData) {
 templ SystemSettings(data PageData) {
 	<div class="admin-section">
 		<h2>Installation settings</h2><p class="section-copy">These values are stored in SQLite. Provider credentials are encrypted with the instance master key and never shown after saving.</p>
-		<form class="settings-form" method="post" action="/settings/system"><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
+		<form class="settings-form" method="post" action={ templ.SafeURL(mailboxURL("/settings/system", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/>
 			<label>Public URL<input name="base_url" type="url" value={ data.RuntimeBaseURL } required/></label>
 			<label>Session lifetime (hours)<input name="session_ttl_hours" type="number" min="1" max="8760" value={ fmt.Sprintf("%d", data.RuntimeSessionTTL) } required/></label>
 			<label>Log level<select name="log_level"><option value="debug" selected?={ data.RuntimeLogLevel == "debug" }>Debug</option><option value="info" selected?={ data.RuntimeLogLevel == "" || data.RuntimeLogLevel == "info" }>Info</option><option value="warn" selected?={ data.RuntimeLogLevel == "warn" }>Warn</option><option value="error" selected?={ data.RuntimeLogLevel == "error" }>Error</option></select></label>
