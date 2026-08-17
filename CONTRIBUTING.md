@@ -28,8 +28,8 @@ docker run --rm -it -p 8080:8080 \
 ```
 
 Open <http://localhost:8080/setup>. The development image contains the pinned
-Go and C toolchains, Make, ShellCheck, Docker CLI, templ, staticcheck, govulncheck,
-actionlint, GoReleaser, and golangci-lint. Mount the Docker socket only when you
+Go and C toolchains, Make, Docker CLI, templ, staticcheck, govulncheck,
+actionlint, and golangci-lint. Mount the Docker socket only when you
 intentionally need container checks from inside it.
 
 ## Before you begin

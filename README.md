@@ -45,14 +45,18 @@ Start a private local demo with one command. It needs only Docker, binds to
 `127.0.0.1`, and does not require a domain or Resend account:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
-  sh -s -- --demo
+docker volume create litebox-demo-data
+docker run --rm --name litebox-demo \
+  -p 127.0.0.1:8080:8080 \
+  -e APP_ENV=development \
+  -e APP_BASE_URL=http://localhost:8080 \
+  -v litebox-demo-data:/data \
+  ghcr.io/nader-jo/litebox:0.3.1
 ```
 
-Open <http://localhost:8080/setup>. Demo data remains in the
-`litebox-demo-data` Docker volume until you delete it. Real email receiving and
-sending are disabled in demo mode.
+Open <http://localhost:8080/setup>. Stop the demo with `Ctrl-C`; demo data
+remains in the `litebox-demo-data` Docker volume until you delete it. Real email
+receiving and sending are disabled in development mode.
 
 ## Architecture
 
@@ -88,24 +92,20 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 - a Resend API key and webhook signing secret;
 - a public HTTPS hostname for webhook delivery.
 
-### 1. Run the guided installer
+### 1. Pull the multi-platform image
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
-  sudo sh
+git clone --depth 1 --branch v0.3.1 https://github.com/Nader-jo/Litebox.git
+cd Litebox
+cp .env.example .env
+docker compose pull
+docker compose up -d
 ```
 
-The installer checks the host architecture and Docker, downloads the latest
-stable VPS bundle, verifies its SHA-256 checksum, prompts for configuration
-without echoing secrets, starts Litebox, and prints the first-login and webhook
-URLs. It installs to `/opt/litebox` by default and Docker automatically selects
-the `linux/amd64` or `linux/arm64` image from the immutable release tag.
-
-Prefer to inspect scripts before running them? Download and verify the attached
-`setup.sh` and `setup.sh.sha256`, review the script, then run `sudo sh setup.sh`.
-The [deployment guide](docs/DEPLOYMENT.md) also documents every flag,
-non-interactive automation, and the fully manual path.
+Docker automatically selects the `linux/amd64` or `linux/arm64` image from the
+immutable release tag. The repository checkout supplies only the deployment
+templates (`compose.yaml`, `Caddyfile`, and `.env.example`); the application
+itself always runs from GHCR.
 
 To build from source for development instead, follow the [Development guide](docs/DEVELOPMENT.md) and use `compose.build.yaml`.
 

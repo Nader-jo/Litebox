@@ -6,17 +6,16 @@ Litebox follows Semantic Versioning. Before 1.0, minor versions may contain docu
 
 Pushing a signed `v*` tag runs `.github/workflows/release.yml` after tests. The pipeline publishes:
 
-- Linux, macOS, and Windows archives for amd64 and arm64;
-- SHA-256 checksums;
-- archive SBOMs;
-- signed GitHub/Sigstore provenance attestations for archives, checksums, and SBOMs;
-- a generated GitHub release/changelog;
-- a multi-platform GHCR image for Linux amd64/arm64;
-- a checksum-pinned `setup.sh` release asset for guided installation and private demo mode;
-- a version-pinned VPS bundle containing the installer, Compose, Caddy, `.env.example`, user/deployment/backup/upgrade guides, and licenses;
+- a GitHub release with generated notes and no application archives;
+- one multi-platform GHCR image for Linux amd64 and arm64;
 - OCI metadata, BuildKit provenance, an image SBOM, GitHub/Sigstore image provenance, and high/critical vulnerability scans for both platforms.
 
-GoReleaser creates the GitHub release as a draft. The workflow publishes that draft only after the GHCR manifest contains both supported platforms and both published images pass the vulnerability gate and hardened health smoke test. A container failure therefore cannot advertise a completed GitHub release.
+The workflow creates the GitHub release as a draft, then publishes it only after
+the GHCR manifest contains both supported platforms and both published images
+pass the vulnerability gate and hardened health smoke test. A container failure
+therefore cannot advertise a completed GitHub release. GitHub's automatic source
+zip/tar links are the only files shown on the release page; deployers consume
+the image from GHCR.
 
 GitHub Actions dependencies are pinned to immutable commit SHAs with human-readable version comments. Dependabot proposes updates.
 
@@ -24,21 +23,15 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 
 1. Ensure `develop` is green and the working tree is clean.
 2. Review dependency and vulnerability reports.
-3. Run `make check`, including the isolated onboarding installer fixture.
+3. Run `make check`.
 4. Build and smoke-test the container as a non-root user on both Linux amd64 and arm64.
 5. Perform a backup/restore drill for schema or storage changes.
 6. Update `CHANGELOG.md`, migration notes, docs, and supported-version policy.
 7. Choose the SemVer version and create an annotated, preferably signed, tag from a commit contained in `develop`.
 8. Push the tag and watch the release workflow.
-9. Verify checksums, archives, the executable installer asset, the VPS bundle, SBOMs, GHCR platforms, OCI labels, attestations, and release notes.
-10. Deploy the exact version tag to a test installation and run `litebox doctor --deep`.
+9. Verify the GHCR platforms, OCI labels, image attestation, vulnerability scans, and release notes.
+10. Deploy the exact image tag to a test installation and run `litebox doctor --deep`.
 11. Announce material security or migration notes clearly.
-
-Consumers can verify a downloaded archive with GitHub CLI:
-
-```bash
-gh attestation verify litebox_0.3.1_linux_amd64.tar.gz --repo Nader-jo/Litebox
-```
 
 Verify the container image and inspect its platforms:
 

@@ -4,6 +4,10 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+
+- Make releases image-only: publish one signed GHCR manifest for Linux AMD64 and ARM64 instead of bundling native binaries, installers, or VPS archives.
+
 ## [0.4.0] - 2026-08-17
 
 ### Added

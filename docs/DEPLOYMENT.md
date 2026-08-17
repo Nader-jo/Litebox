@@ -17,84 +17,47 @@ Docker automatically selects the matching image from a version tag. Thirty-two-b
 - independent backups of the persistent dataset;
 - public HTTPS ingress able to reach `/webhooks/resend`.
 
-## Guided installation
+## Image-only installation
 
-On a fresh VPS, run the release-attached installer:
-
-```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
-  sudo sh
-```
-
-The script:
-
-1. verifies a supported 64-bit AMD/Intel or ARM host and Docker Compose v2;
-2. resolves the latest stable release unless a version is pinned;
-3. downloads the VPS bundle and verifies its attached SHA-256 checksum;
-4. prompts on the controlling terminal, with echo disabled for secrets;
-5. writes a mode-`0600` environment file, validates Compose, and starts the services;
-6. waits for Litebox to become healthy and prints the setup and Resend URLs.
-
-To inspect and verify the script before execution:
+Releases contain the signed multi-platform image only. On a fresh VPS, install
+the small deployment templates from the tagged repository and pull the image:
 
 ```bash
-curl --fail --location --remote-name \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh
-curl --fail --location --remote-name \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh.sha256
-sha256sum --check setup.sh.sha256
-less setup.sh
-sudo sh setup.sh
+VERSION=0.3.1 # replace with the target release
+git clone --depth 1 --branch "v${VERSION}" https://github.com/Nader-jo/Litebox.git /opt/litebox
+cd /opt/litebox
+cp .env.example .env
+# Pin the desired release; Docker selects amd64 or arm64 automatically.
+sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${VERSION}|" .env
+docker compose pull
+docker compose up -d
 ```
 
-Useful options are `--version 0.3.1`, `--install-dir /srv/litebox`,
-`--no-start`, and `--reconfigure`. Run `sh setup.sh --help` for the complete
-environment-variable interface used by unattended provisioning.
-
-Re-running the installer is safe: it preserves the existing `.env` file and
-advances only `LITEBOX_IMAGE` to the selected immutable release. Pass
-`--reconfigure` when managed configuration should be prompted for again. Always
-take a backup and read the release notes before an upgrade.
-
-Follow the [safe upgrade guide](UPGRADING.md) for the complete backup,
-verification, and restorative rollback procedure.
+The first-run wizard stores the public URL, mailbox identity, and provider
+credentials in SQLite. In production, the container log prints a one-time setup
+URL/token. Credentials are encrypted with `/data/.litebox/master.key`; include
+that file in backups. Do not place secrets in `compose.yaml`, shell history,
+image build arguments, GitHub issues, or logs.
 
 ## Private local demo
 
 Anyone with Docker can explore the UI without a domain or provider credentials:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL \
-  https://github.com/Nader-jo/Litebox/releases/latest/download/setup.sh | \
-  sh -s -- --demo
+docker volume create litebox-demo-data
+docker run --rm --name litebox-demo \
+  -p 127.0.0.1:8080:8080 \
+  -e APP_ENV=development \
+  -e APP_BASE_URL=http://localhost:8080 \
+  -v litebox-demo-data:/data \
+  ghcr.io/nader-jo/litebox:0.3.1
 ```
 
-The demo binds only to `127.0.0.1:8080`, uses the hardened production image,
-and persists in the `litebox-demo-data` volume. It cannot send or receive real
-email. The installer prints exact stop, restart, and deletion commands.
+The demo binds only to `127.0.0.1:8080`, persists in the
+`litebox-demo-data` volume, and cannot send or receive real email.
 
-## Manual installation
-
-Download the VPS bundle attached to the release rather than cloning and compiling the repository on the server:
-
-```bash
-VERSION=0.3.1 # replace with the current release
-install -d -m 0750 /opt/litebox
-cd /opt/litebox
-curl --fail --location --output litebox-vps.tar.gz \
-  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz"
-curl --fail --location --output litebox-vps.tar.gz.sha256 \
-  "https://github.com/Nader-jo/Litebox/releases/download/v${VERSION}/litebox_${VERSION}_vps.tar.gz.sha256"
-sha256sum --check litebox-vps.tar.gz.sha256
-tar -xzf litebox-vps.tar.gz
-cp .env.example .env
-chmod 0600 .env
-```
-
-The bundled `.env.example` pins `LITEBOX_IMAGE` to the same complete release version. Set deployment topology in `.env`; the first-run wizard collects the public URL and provider credentials. On a production volume, Litebox prints a one-time setup URL/token to the container log and keeps `/setup` locked until it is used. Credentials are encrypted with `/data/.litebox/master.key`.
-
-Do not place secrets in `compose.yaml`, shell history, image build arguments, GitHub issues, or logs.
+Follow the [safe upgrade guide](UPGRADING.md) for backup, image verification,
+and restorative rollback procedures.
 
 ## Existing reverse proxy
 
@@ -172,7 +135,7 @@ For strict change control, resolve the version tag to its OCI digest after testi
 
 1. Read the release notes and backup the current installation.
 2. Stop the mailbox for a supported quiesced backup.
-3. Download the new release bundle and pull its immutable image tag; avoid `latest` for production pinning.
+3. Set `LITEBOX_IMAGE` to the new immutable image tag and pull it; avoid `latest` for production pinning.
 4. Start Litebox. Migrations are embedded, ordered, and transactional.
 5. Run `litebox doctor` and inspect `/admin/system`.
 

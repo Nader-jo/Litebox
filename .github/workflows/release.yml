@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 30
     environment: release
     permissions:
-      contents: write # Create the GitHub release and upload its assets.
+      contents: write # Create and publish the image release notes.
       packages: write # Publish the release image to GHCR.
       id-token: write # Request the OIDC identity used for attestations.
       attestations: write # Publish GitHub artifact attestations.
@@ -54,50 +54,18 @@ jobs:
           cache: false
       - name: Test release commit
         run: go test ./...
-      - name: Install Syft for archive SBOMs
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          syft-version: v1.50.0
-      - name: Prepare version-pinned VPS bundle
+      - name: Create draft GitHub release
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          source_date_epoch="$(git show -s --format=%ct HEAD)"
-          staging="$(mktemp -d)"
-          trap 'rm -rf "$staging"' EXIT
-          cp compose.yaml Caddyfile .env.example LICENSE NOTICE setup.sh "$staging/"
-          cp docs/DEPLOYMENT.md "$staging/DEPLOYMENT.md"
-          cp docs/UPGRADING.md "$staging/UPGRADING.md"
-          cp docs/BACKUP_AND_RESTORE.md "$staging/BACKUP_AND_RESTORE.md"
-          cp docs/USER_GUIDE.md "$staging/USER_GUIDE.md"
-          sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${version}|" "$staging/.env.example"
-          mkdir -p release
-          bundle="litebox_${version}_vps.tar.gz"
-          tar --sort=name --mtime="@${source_date_epoch}" --owner=0 --group=0 --numeric-owner \
-            -czf "release/${bundle}" -C "$staging" .
-          install -m 0755 setup.sh release/setup.sh
-          (cd release && sha256sum "$bundle" > "${bundle}.sha256")
-          (cd release && sha256sum setup.sh > setup.sh.sha256)
-      - name: Create draft release with binaries, checksums, SBOMs, and VPS bundle
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
-        with:
-          distribution: goreleaser
-          version: v2.17.1
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Attest release archives, checksums, and SBOMs
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/*.sbom.json
-            dist/checksums.txt
-            release/*.tar.gz
-            release/*.sha256
-            release/setup.sh
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"
       - name: Set up QEMU
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
       - name: Set up Buildx

@@ -2,7 +2,6 @@
 .gitignore
 .github
 .golangci.yml
-.goreleaser.yaml
 .data
 .data-*
 data
@@ -24,4 +23,3 @@ compose*.yaml
 Dockerfile.dev
 Makefile
 scripts
-setup.sh

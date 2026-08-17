@@ -43,24 +43,20 @@ Copy the completed backup away from the VPS. A backup on the same disk is not a
 recovery plan. For an important mailbox, restore the backup into a fresh data
 location and run `doctor --deep` before continuing.
 
-## 3. Upgrade with the guided installer
+## 3. Upgrade the pinned image
 
-The installed `/opt/litebox/setup.sh` preserves `.env`, downloads the selected
-release bundle, verifies its SHA-256 checksum, updates the immutable image tag,
-validates Compose, and waits for health:
+Releases publish only the signed multi-platform GHCR image. Update the image
+tag in the existing `.env`, pull it, and restart Compose:
 
 ```bash
 cd /opt/litebox
-sudo sh setup.sh --version 0.3.1
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.1|' .env
+docker compose pull mailbox
+docker compose up -d mailbox
 ```
 
-Omit `--version` to select the latest stable release. Use `--no-start` to stage
-and inspect configuration before starting. Use `--reconfigure` only when you
-intend to replace installer-managed values.
-
-If upgrading from a release that predates the installed script, download and
-verify the current installer first as described in the
-[deployment guide](DEPLOYMENT.md).
+Docker selects the correct `linux/amd64` or `linux/arm64` child image. Keep the
+same `/data` volume and `master.key`; the startup migration is transactional.
 
 ## 4. Verify the upgraded installation
 
@@ -92,16 +88,6 @@ SQLite as the source of truth. Keep the master-key file with every backup. A
 database restored without its matching key can still be inspected for mailbox
 metadata, but encrypted provider credentials must be entered again under
 **Settings → System** before sending or webhook verification resumes.
-
-## Manual image upgrade
-
-Operators who do not use the installer can pin and start the target image:
-
-```bash
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.3.1|' .env
-docker compose pull mailbox
-docker compose up -d mailbox
-```
 
 Never deploy `latest` in production. Verify the target release, image
 attestation, and platform manifest before changing the pin.

@@ -95,16 +95,9 @@ make test-race
 make lint
 make golangci-lint
 make workflow-lint
-make release-check
-make onboarding-check
 make vuln
 make container-smoke
 ```
-
-`make onboarding-check` runs POSIX syntax checks, pinned ShellCheck v0.11.0,
-and an isolated fixture that verifies download checksum handling, secret-safe
-configuration, Compose validation, and idempotent upgrades. It does not contact
-GitHub or start a real Litebox container.
 
 `make golangci-lint` runs golangci-lint v2 with the repository's checked-in
 configuration. CI runs it for every push and pull request in addition to Go

@@ -3,11 +3,9 @@ TEMPL_VERSION := v0.3.1020
 STATICCHECK_VERSION := v0.7.0
 GOVULNCHECK_VERSION := v1.6.0
 ACTIONLINT_VERSION := v1.7.12
-GORELEASER_VERSION := v2.17.1
 GOLANGCI_LINT_VERSION := v2.12.2
-SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
 
-.PHONY: help setup bootstrap generate generated-check fmt fmt-check lint golangci-lint workflow-lint release-check onboarding-check test test-race build run doctor vuln container-smoke compose-up compose-down compose-pull compose-config dev-image check clean
+.PHONY: help setup bootstrap generate generated-check fmt fmt-check lint golangci-lint workflow-lint test test-race build run doctor vuln container-smoke compose-up compose-down compose-pull compose-config dev-image check clean
 
 help:
 	@echo "Litebox development targets"
@@ -20,8 +18,6 @@ help:
 	@echo "  lint           run go vet and staticcheck"
 	@echo "  golangci-lint  run the pinned community linter suite"
 	@echo "  workflow-lint  validate GitHub Actions workflow syntax"
-	@echo "  release-check  validate the GoReleaser configuration"
-	@echo "  onboarding-check validate and test the guided setup script"
 	@echo "  test           run the complete test suite"
 	@echo "  test-race      run tests with the race detector"
 	@echo "  build          build bin/litebox"
@@ -68,15 +64,6 @@ golangci-lint: generate
 workflow-lint:
 	$(GO) run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
-release-check:
-	$(GO) run github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION) check
-
-onboarding-check:
-	sh -n setup.sh
-	sh -n scripts/test-setup.sh
-	docker run --rm -v "$(CURDIR):/mnt:ro" $(SHELLCHECK_IMAGE) -x /mnt/setup.sh /mnt/scripts/test-setup.sh
-	sh scripts/test-setup.sh
-
 test: generate
 	$(GO) test -cover ./...
 
@@ -115,7 +102,7 @@ compose-config:
 dev-image:
 	docker build -f Dockerfile.dev -t litebox:dev .
 
-check: generated-check fmt-check lint golangci-lint workflow-lint release-check onboarding-check test-race vuln build compose-config
+check: generated-check fmt-check lint golangci-lint workflow-lint test-race vuln build compose-config
 
 clean:
 	$(GO) clean
