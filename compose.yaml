@@ -10,6 +10,7 @@ services:
         required: false
     environment:
       APP_ENV: ${APP_ENV:-production}
+      LITEBOX_DOMAIN: ${LITEBOX_DOMAIN:?Set LITEBOX_DOMAIN in .env (for example mail.example.com)}
       APP_LISTEN_ADDR: :8080
       APP_DATA_DIR: /data
       APP_DB_PATH: /data/mailbox.db
@@ -42,7 +43,7 @@ services:
       mailbox:
         condition: service_healthy
     environment:
-      LITEBOX_HOST: ${LITEBOX_HOST:-mail.example.com}
+      LITEBOX_HOST: ${LITEBOX_DOMAIN:?Set LITEBOX_DOMAIN in .env (for example mail.example.com)}
     ports:
       - "80:80"
       - "443:443"

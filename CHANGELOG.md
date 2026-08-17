@@ -4,12 +4,15 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-17
+
 ### Added
 
 - Add digest previews, immediate test delivery, and persisted last-attempt, last-success, count, and error status in Settings → Summary.
 - Add single-use mailbox invitations and password recovery links with hashed, expiring tokens and session revocation after a reset.
 - Preserve mailbox context in URL query parameters so multiple tabs can operate independent mailboxes safely.
 - Show the receiving or sending alias and its light color in thread-list rows as well as conversation messages.
+- Add the required `LITEBOX_DOMAIN` container variable to bootstrap the public URL and optional Caddy hostname.
 
 ### Security
 
@@ -140,7 +143,8 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 - Add automated GitHub Actions security analysis, retain OpenSSF Scorecard results, stop persisting checkout credentials, and validate release tags before publishing.
 - Group coupled CodeQL updates so all analysis phases move to one immutable commit together.
 
-[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Nader-jo/Litebox/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Nader-jo/Litebox/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Nader-jo/Litebox/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Nader-jo/Litebox/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Nader-jo/Litebox/compare/v0.2.2...v0.3.0

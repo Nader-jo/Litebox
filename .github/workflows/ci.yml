@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Compose validates the production deployment template during CI. Real
+  # deployments must set their own public hostname in .env.
+  LITEBOX_DOMAIN: mail.example.com
+
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

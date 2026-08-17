@@ -80,6 +80,7 @@ run_for_platform \
 	--cap-drop ALL \
 	--security-opt no-new-privileges:true \
 	--env APP_ENV=development \
+	--env LITEBOX_DOMAIN=localhost \
 	--env APP_BASE_URL=http://localhost:8080 \
 	--env APP_LISTEN_ADDR=:8080 \
 	--env MAILBOX_PRIMARY_ADDRESS=hello@example.test \

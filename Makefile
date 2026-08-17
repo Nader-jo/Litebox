@@ -96,8 +96,8 @@ compose-pull:
 	docker compose pull mailbox
 
 compose-config:
-	docker compose config --quiet
-	docker compose -f compose.yaml -f compose.build.yaml config --quiet
+	docker compose --env-file .env.example config --quiet
+	docker compose --env-file .env.example -f compose.yaml -f compose.build.yaml config --quiet
 
 dev-image:
 	docker build -f Dockerfile.dev -t litebox:dev .

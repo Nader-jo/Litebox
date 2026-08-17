@@ -23,15 +23,24 @@ Releases contain the signed multi-platform image only. On a fresh VPS, install
 the small deployment templates from the tagged repository and pull the image:
 
 ```bash
-VERSION=0.4.0 # replace with the target release
+VERSION=0.4.1 # replace with the target release
 git clone --depth 1 --branch "v${VERSION}" https://github.com/Nader-jo/Litebox.git /opt/litebox
 cd /opt/litebox
 cp .env.example .env
 # Pin the desired release; Docker selects amd64 or arm64 automatically.
 sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${VERSION}|" .env
+# Set the public HTTPS hostname used by the app and the optional Caddy profile.
+# Do not include https:// or a path.
+sed -i "s|^LITEBOX_DOMAIN=.*|LITEBOX_DOMAIN=mail.example.com|" .env
 docker compose pull
 docker compose up -d
 ```
+
+`LITEBOX_DOMAIN` is required by the production Compose stack. It bootstraps the
+public URL used in the setup link and keeps Caddy on the same hostname. The
+first-run wizard persists the URL in SQLite; later changes should be made in
+**Settings → System** (and in the reverse proxy/DNS configuration). Keep an
+explicit `APP_BASE_URL` only when you intentionally need a non-standard URL.
 
 The first-run wizard stores the public URL, mailbox identity, and provider
 credentials in SQLite. In production, the container log prints a one-time setup
@@ -50,7 +59,7 @@ docker run --rm --name litebox-demo \
   -e APP_ENV=development \
   -e APP_BASE_URL=http://localhost:8080 \
   -v litebox-demo-data:/data \
-  ghcr.io/nader-jo/litebox:0.4.0
+  ghcr.io/nader-jo/litebox:0.4.1
 ```
 
 The demo binds only to `127.0.0.1:8080`, persists in the
@@ -83,7 +92,7 @@ The production `compose.yaml` is image-only. It never builds application source 
 
 ## Supplied Caddy profile
 
-Set `LITEBOX_HOST=mail.example.com`, point DNS to the host, and run:
+Set `LITEBOX_DOMAIN=mail.example.com`, point DNS to the host, and run:
 
 ```bash
 docker compose --profile proxy up -d
@@ -116,7 +125,7 @@ If your platform overrides these controls, preserve write access to `/data` and 
 Inspect the published manifest before deployment:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.4.0
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.4.1
 ```
 
 The manifest must include both `linux/amd64` and `linux/arm64`. Release automation smoke-tests both platform images under the same read-only, non-root constraints used by Compose.
@@ -125,7 +134,7 @@ If GitHub CLI is available, verify the image’s GitHub/Sigstore provenance atte
 
 ```bash
 gh attestation verify \
-  oci://ghcr.io/nader-jo/litebox:0.4.0 \
+  oci://ghcr.io/nader-jo/litebox:0.4.1 \
   --repo Nader-jo/Litebox
 ```
 
@@ -144,7 +153,7 @@ Example:
 ```bash
 docker compose stop mailbox
 # perform and export backup
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.0|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.1|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 docker compose exec mailbox /app/litebox doctor

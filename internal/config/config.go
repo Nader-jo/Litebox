@@ -29,7 +29,11 @@ type Config struct {
 	// AllowUnconfigured permits the first-run wizard to start without provider
 	// credentials. It is set only by Load; hand-built production configs remain
 	// strict and must include provider credentials.
-	AllowUnconfigured          bool
+	AllowUnconfigured bool
+	// Domain is the public hostname used to bootstrap the installation. It is
+	// intentionally kept as deployment configuration so the first-run link and
+	// reverse proxy can agree before SQLite settings exist.
+	Domain                     string
 	BaseURL                    *url.URL
 	ListenAddr                 string
 	DataDir                    string
@@ -61,7 +65,15 @@ type Config struct {
 // Load reads configuration from environment variables and applies safe local defaults.
 func Load() (Config, error) {
 	dataDir := env("APP_DATA_DIR", defaultDataDir)
-	baseURL, err := url.Parse(env("APP_BASE_URL", "http://localhost:8080"))
+	domain := strings.TrimSpace(os.Getenv("LITEBOX_DOMAIN"))
+	baseURLValue := strings.TrimSpace(os.Getenv("APP_BASE_URL"))
+	if baseURLValue == "" && domain != "" {
+		baseURLValue = "https://" + domain
+	}
+	if baseURLValue == "" {
+		baseURLValue = "http://localhost:8080"
+	}
+	baseURL, err := url.Parse(baseURLValue)
 	if err != nil {
 		return Config{}, fmt.Errorf("parse APP_BASE_URL: %w", err)
 	}
@@ -71,6 +83,7 @@ func Load() (Config, error) {
 	cfg := Config{
 		Environment:                strings.ToLower(env("APP_ENV", "development")),
 		AllowUnconfigured:          true,
+		Domain:                     domain,
 		BaseURL:                    baseURL,
 		ListenAddr:                 env("APP_LISTEN_ADDR", ":8080"),
 		DataDir:                    dataDir,
@@ -110,6 +123,13 @@ func Load() (Config, error) {
 // Validate reports all configuration errors that can be detected before startup.
 func (c Config) Validate() error {
 	var problems []error
+	if strings.TrimSpace(c.Domain) != "" {
+		if err := validateDomain(c.Domain); err != nil {
+			problems = append(problems, err)
+		}
+	} else if c.Environment == "production" {
+		problems = append(problems, errors.New("LITEBOX_DOMAIN is required in production"))
+	}
 	if c.BaseURL == nil || c.BaseURL.Scheme == "" || c.BaseURL.Host == "" {
 		problems = append(problems, errors.New("APP_BASE_URL must be an absolute URL"))
 	} else if c.Environment == "production" && c.BaseURL.Scheme != "https" {
@@ -150,6 +170,18 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func validateDomain(value string) error {
+	domain := strings.TrimSpace(value)
+	if domain == "" || strings.Contains(domain, "://") || strings.ContainsAny(domain, "/?# \t\r\n") {
+		return fmt.Errorf("LITEBOX_DOMAIN must be a hostname without a scheme or path")
+	}
+	parsed, err := url.Parse("https://" + domain)
+	if err != nil || parsed.Host != domain || parsed.Hostname() == "" {
+		return fmt.Errorf("LITEBOX_DOMAIN must be a valid hostname")
+	}
+	return nil
 }
 
 // ApplySettings overlays the persisted installation snapshot on bootstrap

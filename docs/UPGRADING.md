@@ -50,7 +50,7 @@ tag in the existing `.env`, pull it, and restart Compose:
 
 ```bash
 cd /opt/litebox
-sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.0|' .env
+sed -i 's|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.1|' .env
 docker compose pull mailbox
 docker compose up -d mailbox
 ```
@@ -84,7 +84,9 @@ period appropriate to the mailbox's importance.
 ### Settings and key recovery
 
 Version 0.4.0 imports legacy provider environment values once and then treats
-SQLite as the source of truth. Keep the master-key file with every backup. A
+SQLite as the source of truth. Version 0.4.1 additionally requires
+`LITEBOX_DOMAIN` in the Compose environment; keep it aligned with the public
+hostname and Caddy/DNS configuration. Keep the master-key file with every backup. A
 database restored without its matching key can still be inspected for mailbox
 metadata, but encrypted provider credentials must be entered again under
 **Settings → System** before sending or webhook verification resumes.

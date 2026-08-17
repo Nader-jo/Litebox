@@ -36,8 +36,8 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 Verify the container image and inspect its platforms:
 
 ```bash
-gh attestation verify oci://ghcr.io/nader-jo/litebox:0.4.0 --repo Nader-jo/Litebox
-docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.4.0
+gh attestation verify oci://ghcr.io/nader-jo/litebox:0.4.1 --repo Nader-jo/Litebox
+docker buildx imagetools inspect ghcr.io/nader-jo/litebox:0.4.1
 ```
 
 The `release` GitHub environment should require maintainer approval. The
@@ -47,8 +47,8 @@ artifacts.
 Example:
 
 ```bash
-git tag -s v0.4.0 -m "Litebox v0.4.0"
-git push origin v0.4.0
+git tag -s v0.4.1 -m "Litebox v0.4.1"
+git push origin v0.4.1
 ```
 
 ## Release failure
@@ -59,9 +59,10 @@ Do not move or recreate a public version tag. If verification fails while the re
 
 Every release note must state whether a migration runs and whether rollback requires restoring a backup. The project does not automatically downgrade SQLite schemas.
 
-Version 0.4.0 applies migration `005_settings_digests_colors.sql`. The current
-unreleased v0.4.1 work also applies `006_account_tokens_digest_status.sql`,
-which adds digest delivery status and hashed invitation/password-reset tokens.
+Version 0.4.1 applies migration `006_account_tokens_digest_status.sql`, which
+adds digest delivery status and hashed invitation/password-reset tokens. It also
+adds the required `LITEBOX_DOMAIN` deployment variable; no additional database
+migration is needed for that setting.
 Back up `/data`—including
 `/data/.litebox/master.key`—before upgrading. Restoring the database without
 the matching master key requires entering provider credentials again.
