@@ -29,10 +29,11 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - full-text search with useful operators;
 - first-run setup, Argon2id passwords, hashed sessions, CSRF protection, and login throttling;
 - independent mailboxes, shared aliases, per-mailbox roles, mailbox switching, and revocable device sessions;
-- light, configurable alias colors shown consistently in the inbox and conversation view;
+- light, configurable alias colors shown consistently in thread rows and conversation messages;
+- single-use mailbox invitations and email-based password recovery with session revocation;
 - per-user daily or weekly private summaries with counts by mailbox and no message content;
 - database-backed installation settings with encrypted Resend credentials and a one-time setup link;
-- one signed, shell-free GHCR image tag that runs on Linux AMD64 and ARM64 VPS hosts;
+- one signed, shell-free multi-platform GHCR image that runs on Linux AMD64 and ARM64 VPS hosts;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
 - mobile search, keyboard navigation, shortcut help, and clear progress/confirmation feedback.
@@ -167,7 +168,7 @@ litebox version
 - Roles are `owner`, `admin`, `member`, and `viewer`. Viewers cannot mutate mailbox state or send mail.
 - Each browser/device login is a separate session. Users can inspect and revoke sessions under **Settings → Sessions**.
 - **Settings → Summary** can send a daily or weekly count-only report to a private address, scoped to all or selected mailboxes.
-- Alias colors are assigned automatically and can be changed from **Settings → Mailboxes**; messages display the color of the address they matched.
+- Alias colors are assigned automatically and can be changed from **Settings → Mailboxes**; thread rows and messages display the color of the address they matched.
 - If one provider message targets addresses in two independent mailboxes, Litebox archives an isolated local copy in each mailbox.
 
 See [Multi-mailbox access](docs/MULTI_MAILBOX.md) for role semantics, routing behavior, and migration details.
@@ -220,9 +221,9 @@ Litebox assumes every inbound message is hostile.
 - Attachments and raw mail are never exposed through the static asset handler.
 - SVG and HTML attachments download rather than render in the application origin.
 - Session and CSRF secrets are random 256-bit values; only hashes are stored in SQLite.
-- The mailbox selector cookie is untrusted: every request resolves it through the authenticated user's membership, and content repositories require a mailbox scope.
+- The mailbox selector in URL query parameters and the preference cookie is untrusted: every request resolves it through the authenticated user's membership, and content repositories require a mailbox scope.
 - Authenticated sends are capped at 30 per user per rolling hour, and each message is capped at 20 recipients.
-- Production refuses an HTTP `APP_BASE_URL` or missing Resend credentials.
+- Production requires an HTTPS public URL and requires Resend API/webhook credentials when the first-run wizard is completed; an otherwise empty production volume may start only to expose that one-time setup flow.
 - The shell-free `scratch` container is non-root, drops Linux capabilities, uses a read-only root filesystem, and writes only to `/data` and a bounded `/tmp` tmpfs.
 
 Review [SECURITY.md](SECURITY.md) for reporting and supported versions, and [Threat model](docs/THREAT_MODEL.md) for trust boundaries and residual risks.
@@ -251,6 +252,7 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | Document | Audience |
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Maintainers and integrators |
+| [Product requirements](mailbox_prd.md) | Product and architecture context |
 | [Multi-mailbox access](docs/MULTI_MAILBOX.md) | Operators and administrators |
 | [User guide](docs/USER_GUIDE.md) | Mailbox users |
 | [Deployment](docs/DEPLOYMENT.md) | Operators |

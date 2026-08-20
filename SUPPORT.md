@@ -13,7 +13,8 @@ Litebox is maintained as a community open-source project.
 
 Before asking, check the [User guide](docs/USER_GUIDE.md), [README](README.md),
 the documentation under `docs/`, closed issues, and the output of
-`mailbox doctor --deep` when you operate the server.
+`litebox doctor --deep` when you operate the server. In Docker, run it as
+`docker compose exec mailbox /app/litebox doctor --deep`.
 
 Community support is best-effort and has no response-time guarantee. Include the
 Litebox version, deployment method, operating system, redacted configuration,

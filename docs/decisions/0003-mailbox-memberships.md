@@ -9,7 +9,7 @@ Litebox originally authenticated one administrator and stored one mailbox ID in 
 
 ## Decision
 
-Sessions authenticate users only. A `mailbox_memberships` join table authorizes users for mailboxes with `owner`, `admin`, `member`, or `viewer` roles. `mailbox_addresses` maps each globally unique primary address or alias to one mailbox. The active-mailbox cookie is a non-authoritative preference that is resolved against memberships on every request.
+Sessions authenticate users only. A `mailbox_memberships` join table authorizes users for mailboxes with `owner`, `admin`, `member`, or `viewer` roles. `mailbox_addresses` maps each globally unique primary address or alias to one mailbox. Navigable links carry the active mailbox in a `mailbox` query parameter, while an HttpOnly cookie remains a non-authoritative fallback preference; both are resolved against memberships on every request.
 
 Interactive repositories require an authorized mailbox ID for content reads and mutations. Inbound recipient routing resolves database addresses independently of browser authorization. One provider email delivered to multiple independent mailboxes is stored once per mailbox with per-mailbox idempotency.
 
@@ -18,7 +18,7 @@ Interactive repositories require an authorized mailbox ID for content reads and 
 - Membership changes take effect across all of a user's sessions on their next request.
 - Object identifiers cannot cross mailbox boundaries without a matching membership and mailbox-scoped query.
 - Existing installations migrate without losing their primary mailbox or administrator access.
-- Multiple browser tabs share the active-mailbox preference; URL-addressable mailbox context may be added later if independent per-tab selection is needed.
+- Navigable mailbox URLs let independent browser tabs preserve different selections; the fallback cookie still makes ordinary navigation convenient.
 - The design provides isolation inside one trusted installation, not a hostile multi-tenant hosting guarantee.
 
 ## Alternatives considered

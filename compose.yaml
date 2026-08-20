@@ -2,7 +2,7 @@ name: litebox
 
 services:
   mailbox:
-    image: ${LITEBOX_IMAGE:-ghcr.io/nader-jo/litebox:latest}
+    image: ${LITEBOX_IMAGE:-ghcr.io/nader-jo/litebox:0.4.1}
     restart: unless-stopped
     init: true
     env_file:

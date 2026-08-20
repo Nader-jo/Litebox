@@ -31,7 +31,9 @@ Open <http://localhost:8080/setup>.
 To exercise the complete container locally from source:
 
 ```bash
-docker compose -f compose.yaml -f compose.build.yaml up -d --build
+cp .env.example .env
+# Set APP_ENV=development and APP_BASE_URL=http://localhost:8080 in .env.
+docker compose --env-file .env -f compose.yaml -f compose.build.yaml up -d --build
 make container-smoke
 ```
 

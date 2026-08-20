@@ -56,9 +56,22 @@ Controls also include a user-visible active-session list, per-session revocation
 
 Residual risk: host/browser compromise defeats web-session controls. Litebox does not currently provide a second factor.
 
+### Invitation and password-recovery tokens
+
+Controls: raw invitation and password-reset tokens are delivered only in the
+account email; SQLite stores only SHA-256 token hashes; tokens are single-use
+and expire after 72 hours for invitations or 30 minutes for password resets;
+consumption is atomic; and a successful password reset revokes every existing
+session for that user.
+
+Residual risk: compromise of the recipient's email account or access to an
+unexpired token URL grants the same account action as the legitimate recipient.
+Operators should protect the public URL, provider credentials, and mailbox data
+as one installation-wide trust boundary.
+
 ### Cross-mailbox access
 
-Controls: sessions authenticate a user rather than a mailbox; the active-mailbox cookie is treated as untrusted input; every request resolves current membership; mailbox content reads and mutations include `mailbox_id`; draft reply targets and attachment ownership are checked against the active mailbox; roles separate owner/admin configuration, member write access, and viewer read-only access; the last mailbox owner cannot be removed or demoted.
+Controls: sessions authenticate a user rather than a mailbox; the active-mailbox query parameter and preference cookie are treated as untrusted input; every request resolves current membership; mailbox content reads and mutations include `mailbox_id`; draft reply targets and attachment ownership are checked against the active mailbox; roles separate owner/admin configuration, member write access, and viewer read-only access; the last mailbox owner cannot be removed or demoted.
 
 Residual risk: Litebox is a single trusted installation, not a hostile multi-tenant service. Host, database, backup, or installation-wide operator compromise exposes all local mailboxes.
 
@@ -90,7 +103,11 @@ Controls: forwarded client IP is honored only when the direct peer matches `TRUS
 
 ## Secrets
 
-Secrets enter only through runtime environment/secrets. Logs intentionally omit passwords, cookies, message bodies, attachments, API keys, webhook secrets, and recipient addresses by default. Admin pages show safe summaries, never raw job payloads or absolute paths.
+Provider secrets enter through the first-run/settings forms or the legacy runtime
+environment bootstrap and are stored encrypted in SQLite with the instance
+master key. Logs intentionally omit passwords, cookies, message bodies,
+attachments, API keys, webhook secrets, and recipient addresses by default. Admin
+pages show safe summaries, never raw job payloads or absolute paths.
 
 ## Out of scope
 

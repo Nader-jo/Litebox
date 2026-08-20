@@ -8,7 +8,7 @@ Litebox is one trusted, self-hosted installation that can contain multiple indep
 - A **session** is one browser/device login for a user. Sessions can be revoked independently.
 - A **mailbox** is an isolated inbox with its own threads, messages, drafts, folders, search, unread state, aliases, and membership list.
 - An **address** is the primary identity or an alias belonging to exactly one mailbox.
-- Every address has a light, editable color. Inbound messages retain the matched address ID, so the conversation badge remains correct even when a mailbox has many aliases.
+- Every address has a light, editable color. Inbound messages retain the matched address ID, so thread rows and conversation badges remain correct even when a mailbox has many aliases.
 - A **membership** grants one user a role in one mailbox. A user can belong to many mailboxes and may have a different role in each.
 
 ## Roles
@@ -23,6 +23,12 @@ Litebox is one trusted, self-hosted installation that can contain multiple indep
 A mailbox must always retain at least one owner. Password resets revoke all of that user's sessions; **Settings → Sessions** can revoke one browser without affecting the others.
 
 Installation-wide job, webhook, and storage diagnostics are available only while operating the primary mailbox as an owner or administrator.
+
+Owners and administrators can add a person with an initial password or send a
+single-use invitation from **Settings → People**. Invitations expire after 72
+hours; the recipient chooses a password before access is granted. Owners may
+grant ownership, while administrators may grant only admin, member, or viewer
+access.
 
 ## Address and delivery behavior
 

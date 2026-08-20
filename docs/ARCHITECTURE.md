@@ -60,9 +60,16 @@ HTTP handlers contain no SQL. Application services contain no Resend SDK types. 
 
 ## Identity and mailbox authorization
 
-The durable relationship is `users -> mailbox_memberships -> mailboxes -> mailbox_addresses`. Users may hold different roles in different mailboxes, and each user may have multiple independent session rows. The active-mailbox cookie is only a preference: authentication resolves it against current memberships on every request and falls back to the user's first authorized mailbox.
+The durable relationship is `users -> mailbox_memberships -> mailboxes -> mailbox_addresses`. Users may hold different roles in different mailboxes, and each user may have multiple independent session rows. Navigable links carry the active mailbox as a `mailbox` query parameter so separate tabs can remain independent; an HttpOnly mailbox cookie is retained as a fallback preference. Both are untrusted: authentication resolves the selected mailbox against current memberships on every request and falls back to the user's first authorized mailbox.
 
 `owner` and `admin` may manage mailbox configuration and people, `member` may read and write mail, and `viewer` is read-only. Repository methods serving HTTP content require a mailbox ID and include it in reads and mutations. Attachment authorization joins through the owning message or draft. This prevents a valid identifier copied from one mailbox from crossing into another.
+
+Installation settings are persisted in SQLite after first-run setup. The public
+URL, session lifetime, log level, and encrypted Resend credentials can be
+updated under **Settings → System**; the instance master key remains deployment
+state under `/data/.litebox/master.key`. Invitation and password-reset tokens
+are single-use, expiring hashes. Each user can also configure one metadata-only
+daily or weekly summary scoped to accessible mailboxes.
 
 ## Inbound state transition
 

@@ -20,7 +20,8 @@ Add the exact records Resend displays for:
 
 Add DMARC according to the domain's policy and rollout plan. Do not copy placeholder record values from this repository.
 
-The web host and mail domain are independent:
+The web host and mail domain are independent. `LITEBOX_DOMAIN` names the public
+application/proxy host; it does not have to be the domain used for email:
 
 ```text
 mail.example.com        browser UI and webhook HTTPS host
@@ -49,7 +50,13 @@ email.suppressed
 email.complained
 ```
 
-Store the signing secret in `RESEND_WEBHOOK_SECRET`. Litebox rejects missing, invalid, or stale signatures. It verifies the exact raw body before JSON parsing.
+Enter the API key, webhook signing secret, and optional domain ID in the first-run
+wizard or **Settings → System**. Litebox encrypts the provider values in SQLite
+with `/data/.litebox/master.key`. `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, and
+`RESEND_DOMAIN_ID` remain supported as one-time legacy bootstrap values; after
+the installation is configured, SQLite is the source of truth. Litebox rejects
+missing, invalid, or stale webhook signatures and verifies the exact raw body
+before JSON parsing.
 
 ## Provider behavior Litebox relies on
 
@@ -61,6 +68,10 @@ Store the signing secret in `RESEND_WEBHOOK_SECRET`. Litebox rejects missing, in
 - idempotency keys have a finite provider lifetime.
 
 Litebox therefore persists the verified event and job before returning 200, retrieves bytes asynchronously, copies all durable content locally, caps raw outbound attachments at 25 MiB by default, and maintains its own duplicate-send guard.
+
+The primary mailbox is also used to deliver account invitations, password-reset
+links, and optional metadata-only summaries. Verify outbound sending before
+depending on those features.
 
 Official references:
 

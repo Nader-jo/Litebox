@@ -1,23 +1,23 @@
 # Mailbox — Product Requirements Document
 
 **File:** `mailbox_prd.md`
-**Document version:** 2.0
-**Date:** 2026-08-10
-**Status:** Build-ready MVP specification
+**Document version:** 2.1
+**Date:** 2026-08-20
+**Status:** Current implementation and product requirements for v0.4.1
 **Primary implementation language:** Go
 **Deployment:** Docker Compose
 **Database:** SQLite
-**Durable blob storage:** Local filesystem by default; optional S3-compatible backend (including RustFS)
+**Durable blob storage:** Local filesystem in the shipped MVP; S3-compatible storage remains a future adapter
 **Email transport:** Resend Sending + Receiving APIs and webhooks
 
-> **v2 architecture:** RustFS is no longer required. The default mailbox is one Go container with one durable `/data` volume containing SQLite plus raw email/attachment blobs. A provider-neutral `BlobStore` keeps S3/RustFS available as an optional advanced backend.
+> **Implementation status (v0.4.1):** The code now implements the one-container filesystem architecture, multiple independent mailboxes, aliases with colors, per-mailbox memberships, database-backed encrypted settings, metadata-only summaries, single-use invitations, password recovery, and URL-preserved mailbox context. This file retains the original product requirements and implementation plan; where a later section says “MVP,” the current behavior is defined by the code and the operator/user guides linked from `README.md`.
 
 ---
 
 # 1. Executive Summary
 
 
-Mailbox is a deliberately small, self-hosted web mailbox for a custom-domain address such as:
+Litebox is a deliberately small, self-hosted web mailbox for custom-domain addresses such as:
 
 ```text
 hello@abc.com
@@ -35,7 +35,10 @@ It provides the normal human mailbox workflows required for a solo founder or sm
 - Drafts;
 - Archive, Starred, Trash, and restore;
 - historical search;
-- durable local ownership of old mail independently of Resend retention.
+- durable local ownership of old mail independently of Resend retention;
+- multiple independent mailboxes, aliases, users, roles, and revocable sessions;
+- private daily or weekly count-only summaries;
+- single-use mailbox invitations and password recovery.
 
 Mailbox deliberately does **not** implement SMTP, IMAP, POP3, or a general-purpose mail server. Resend handles internet-facing email transport. The Go application owns the human mailbox: UI, state, threading, search, authentication, webhook ingestion, background work, and durable history.
 
@@ -48,7 +51,7 @@ The default architecture is intentionally tiny:
                        |
                        v
             +----------------------+
-            |   Mailbox Go binary  |
+            |   Litebox Go binary  |
             |----------------------|
             | templ + HTMX UI      |
             | HTTP routes          |
@@ -75,7 +78,10 @@ Resend --------> /webhooks/resend
 
 The **default Docker Compose deployment contains one required container**. SQLite is embedded, the durable job queue is SQLite-backed, and raw `.eml` files plus attachments live on the mounted filesystem.
 
-Object storage is an optional deployment choice, not an MVP prerequisite. The code must use a `BlobStore` abstraction so an optional S3 implementation can later target RustFS, Amazon S3, Cloudflare R2, or another compatible provider.
+Object storage is not an optional runtime choice in v0.4.1: only the filesystem
+backend is shipped and accepted by configuration. The code uses a `BlobStore`
+abstraction so a future S3-compatible implementation can target RustFS, Amazon
+S3, Cloudflare R2, or another compatible provider without changing mailbox logic.
 
 The deployment is a single trusted installation centered on a bootstrapped primary mailbox. It supports multiple users, independent mailboxes, aliases, per-mailbox permissions, and multiple browser sessions; hostile multi-tenant SaaS behavior remains out of scope.
 
@@ -244,7 +250,7 @@ The MVP is successful when a user can reliably use `hello@abc.com` as a small-bu
 
 ## 4.1 Functional goals
 
-The MVP must support:
+The current v0.4.1 implementation supports:
 
 1. secure login;
 2. first-run administrator setup;
@@ -265,7 +271,13 @@ The MVP must support:
 17. permanent storage of inbound mail;
 18. webhook diagnostics;
 19. service-health diagnostics;
-20. backup procedures.
+20. backup procedures;
+21. multiple independent mailboxes and aliases;
+22. owner, admin, member, and viewer memberships;
+23. per-user daily or weekly metadata-only summaries;
+24. single-use invitations and password-reset links;
+25. persisted installation settings with encrypted provider credentials;
+26. independent URL mailbox context for multiple browser tabs.
 
 ## 4.2 Operational goals
 
@@ -283,7 +295,9 @@ The application must:
 
 ## 4.3 Performance goals
 
-For a mailbox containing up to approximately 100,000 messages:
+For a mailbox containing up to approximately 100,000 messages, the original
+performance targets remain engineering goals rather than externally guaranteed
+SLAs:
 
 - initial authenticated Inbox page should normally render in <300 ms on a modest VPS when data is local;
 - list pagination queries should target <100 ms;
@@ -402,7 +416,9 @@ The webhook contains metadata but not the complete body and attachment bytes. Th
 
 Once receiving is enabled for a domain, mail to addresses on that receiving domain may arrive at Resend. Mailbox therefore needs an **application-layer allowed-recipient check**.
 
-For MVP:
+The primary address and database-managed aliases are the accepted addresses.
+`MAILBOX_ALLOWED_RECIPIENTS` seeds aliases for the primary mailbox when a new
+data volume is created:
 
 ```text
 MAILBOX_PRIMARY_ADDRESS=hello@abc.com
@@ -410,9 +426,9 @@ MAILBOX_PRIMARY_ADDRESS=hello@abc.com
 
 Only messages addressed to configured mailbox addresses are ingested into the normal Inbox.
 
-Unknown local-parts should be recorded minimally for diagnostics and discarded by default.
-
-Do not create a silent catch-all mailbox unless explicitly configured.
+Unknown local-parts are acknowledged, recorded only as needed for webhook/job
+diagnostics, and discarded before raw mail or attachments are downloaded. There
+is no catch-all setting in v0.4.1.
 
 ## 7.3 Webhook delivery semantics
 
@@ -731,7 +747,8 @@ mailbox/
 
 A person allowed to log into the mailbox application.
 
-MVP: exactly one enabled user.
+The implementation supports multiple enabled users. Access is granted through
+per-mailbox memberships with `owner`, `admin`, `member`, or `viewer` roles.
 
 Fields:
 
@@ -755,7 +772,9 @@ display_name: ABC
 address: hello@abc.com
 ```
 
-MVP: one primary mailbox.
+An installation has one primary mailbox for provider-facing account messages and
+can contain additional independent mailboxes. Each mailbox has a primary address
+and zero or more aliases in `mailbox_addresses`.
 
 ## 11.3 Thread
 
@@ -1465,7 +1484,7 @@ Go:
 
 Storage paths/keys are never exposed as browser-accessible filesystem URLs.
 
-## 16.10 Optional S3Store
+## 16.10 Future S3Store
 
 An optional S3 implementation may be added after the default path is stable.
 
@@ -1487,10 +1506,10 @@ RustFS must be treated as one endpoint compatible with this adapter, not as a sp
 
 Do not allow an operator to point a non-empty installation at another backend and assume old data follows automatically.
 
-Future command:
+Possible future command (not shipped in v0.4.1):
 
 ```text
-mailbox storage migrate --from filesystem --to s3
+litebox storage migrate --from filesystem --to s3
 ```
 
 must enumerate SQLite references, copy, checksum-verify, update rows transactionally, retain source until completion, and emit a migration report.
@@ -2034,6 +2053,12 @@ After one user exists:
 - `/setup` returns 404 or redirects to login;
 - setup cannot create additional unauthenticated administrators.
 
+The shipped application also exposes single-use, expiring account flows:
+
+- `GET/POST /invite` accepts a mailbox invitation and lets the recipient choose a password;
+- `GET/POST /password-reset` requests a reset link without revealing whether an email exists;
+- `GET/POST /password-reset/confirm` consumes a reset link and revokes the user's existing sessions.
+
 ## 21.2 Password hashing
 
 Use Argon2id from `golang.org/x/crypto/argon2`.
@@ -2120,6 +2145,13 @@ POST /login
 GET  /setup
 POST /setup
 
+GET  /invite
+POST /invite
+GET  /password-reset
+POST /password-reset
+GET  /password-reset/confirm
+POST /password-reset/confirm
+
 GET  /health/live
 GET  /health/ready
 
@@ -2169,7 +2201,22 @@ GET /attachments/{attachmentID}/inline
 GET /search
 
 GET /settings
+GET /settings/mailboxes
+GET /settings/people
+GET /settings/sessions
+GET /settings/digest
+GET /admin/system
 POST /settings/profile
+POST /settings/system
+POST /settings/digest
+POST /settings/digest/test
+POST /mailboxes
+POST /mailboxes/{mailboxID}/aliases
+POST /mailboxes/{mailboxID}/aliases/{addressID}/color
+POST /mailboxes/{mailboxID}/aliases/{addressID}/delete
+POST /mailboxes/{mailboxID}/members
+POST /mailboxes/{mailboxID}/members/{userID}/delete
+POST /sessions/{sessionID}/revoke
 
 POST /logout
 ```
@@ -2184,7 +2231,8 @@ GET  /admin/webhooks
 GET  /admin/storage
 ```
 
-Do not expose secrets on these pages.
+Do not expose secrets on these pages. The system page is available only when
+the active mailbox is the primary mailbox and the user is an owner or admin.
 
 ---
 
@@ -2263,9 +2311,10 @@ Elements:
 - Sign in;
 - generic invalid credentials error.
 
-No "forgot password" in MVP unless an email-independent recovery mechanism is implemented.
-
-For self-hosted MVP, password reset can be a CLI/admin operation.
+The shipped login page includes **Forgot your password?**. Reset links expire
+after 30 minutes, are single-use, and revoke all sessions after a successful
+reset. The CLI `litebox reset-password --email <email>` remains available for
+operator recovery when outbound email is unavailable.
 
 ## 24.2 Inbox
 
@@ -2359,7 +2408,7 @@ Use modal or right-side sheet on desktop.
 
 Fields:
 
-- From (fixed primary mailbox in MVP);
+- From (any enabled primary address or alias in the active mailbox);
 - To;
 - Cc/Bcc toggle;
 - Subject;
@@ -2445,40 +2494,42 @@ from:alice@example.com   has:attachment   after:2026-01-01
 
 Sections:
 
-### Mailbox
+### Mailboxes
 
 - display name;
-- address;
-- inbound enabled;
-- outbound enabled.
+- primary address and aliases;
+- configurable alias colors;
+- create an additional independent mailbox.
 
-### Resend
+### People
 
-Read-only diagnostics:
+- list mailbox memberships;
+- add a person with an initial password or send a 72-hour invitation;
+- assign owner, admin, member, or viewer roles subject to the current user's role.
 
-- domain identifier if configured;
-- last webhook received;
-- last inbound successfully archived;
-- last outbound send;
-- recent provider error.
+### Sessions
 
-Do not display API key.
+- list active browser/device sessions;
+- revoke an individual session;
+- revoke all sessions as a consequence of a password reset.
 
-### Storage
+### Summary
 
-- configured backend (`filesystem` or optional `s3`);
-- blob-storage health;
-- filesystem root or S3 bucket name as appropriate;
-- free disk bytes for filesystem backend;
-- approximate attachment count;
-- approximate stored bytes where cheaply available.
+- daily or Monday-only weekly schedule;
+- recipient, time zone, local send hour, and all/selected mailbox scope;
+- metadata-only preview, last counts, last attempt, last success, and last error;
+- immediate test delivery.
 
-### Database
+### System
 
-- SQLite health;
-- database file size;
-- WAL file size;
-- last backup timestamp if backup integration reports it.
+- public URL, session lifetime, and log level;
+- encrypted Resend API key, webhook secret, and optional domain ID;
+- pending/dead jobs, failed attachments, raw archive gaps, database size, and blob health.
+
+Provider credentials are never displayed after saving. Runtime settings are
+stored in SQLite; the deployment environment remains responsible for topology
+such as the data path, listener, filesystem storage paths, proxy trust, and the
+required production `LITEBOX_DOMAIN`.
 
 ---
 
@@ -2527,12 +2578,15 @@ This makes the application debuggable and resilient.
 
 ```dotenv
 # Application
-APP_ENV=development
-APP_BASE_URL=http://localhost:8080
+APP_ENV=production
+# Required in production; hostname only, without https:// or a path.
+LITEBOX_DOMAIN=mail.example.com
+# Optional override. If omitted, the app derives https://LITEBOX_DOMAIN.
+# APP_BASE_URL=https://mail.example.com
 APP_LISTEN_ADDR=:8080
 APP_DATA_DIR=/data
 APP_DB_PATH=/data/mailbox.db
-APP_COOKIE_NAME=mailbox_session
+APP_COOKIE_NAME=litebox_session
 APP_SESSION_TTL_HOURS=168
 APP_LOG_LEVEL=info
 
@@ -2541,23 +2595,19 @@ MAILBOX_PRIMARY_ADDRESS=hello@abc.com
 MAILBOX_DISPLAY_NAME=ABC
 MAILBOX_ALLOWED_RECIPIENTS=hello@abc.com
 
-# Resend
+# Legacy Resend bootstrap values. The wizard and Settings → System are preferred;
+# configured values are encrypted and persisted in SQLite.
 RESEND_API_KEY=
 RESEND_WEBHOOK_SECRET=
 RESEND_DOMAIN_ID=
+
+# Instance key; preserve with every backup.
+LITEBOX_MASTER_KEY_FILE=/data/.litebox/master.key
 
 # Storage — required/default
 STORAGE_BACKEND=filesystem
 STORAGE_ROOT=/data/objects
 STORAGE_TMP_ROOT=/data/tmp
-
-# Optional S3-compatible backend; ignored unless STORAGE_BACKEND=s3
-S3_ENDPOINT=
-S3_REGION=us-east-1
-S3_BUCKET=mailbox
-S3_ACCESS_KEY_ID=
-S3_SECRET_ACCESS_KEY=
-S3_FORCE_PATH_STYLE=true
 
 # Limits
 MAX_WEBHOOK_BODY_BYTES=1048576
@@ -2573,9 +2623,16 @@ JOB_LEASE_SECONDS=120
 
 # Security / proxy
 TRUSTED_PROXY_CIDRS=
+
+# Compose conveniences
+LITEBOX_PORT=8080
+LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.1
 ```
 
-Always validate the primary mailbox, Resend credentials, numeric limits, SQLite path, and writable data directory.
+In production, validate `LITEBOX_DOMAIN`, an HTTPS public URL, the primary
+mailbox, Resend credentials during first-run setup, numeric limits, the SQLite
+path, and writable data directories. Development mode may start without provider
+credentials for the local demo.
 
 For `STORAGE_BACKEND=filesystem`:
 
@@ -2584,53 +2641,33 @@ For `STORAGE_BACKEND=filesystem`:
 - verify it is writable;
 - verify it is outside the public static asset tree.
 
-For `STORAGE_BACKEND=s3`, validate S3 configuration and perform a bounded health check.
-
-The default filesystem deployment must not require any S3 variables.
+`STORAGE_BACKEND` currently accepts only `filesystem`; the default deployment
+does not require S3 variables. An S3-compatible backend is a future adapter and
+must not be enabled by setting an unsupported value today.
 
 ---
 
 # 27. Dockerfile
 
-Use a multi-stage build.
-
-Concept:
+The shipped `Dockerfile` is a reproducible multi-stage build with a scratch
+runtime:
 
 ```dockerfile
-FROM golang:<pinned-version>-alpine AS builder
+FROM golang:1.26.6-alpine3.23 AS builder
+# install the pinned build tools, download modules, and build ./cmd/mailbox
 
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# Generate templ sources if generated files are not committed.
-RUN go generate ./...
-
-RUN CGO_ENABLED=0 go build \
-    -trimpath \
-    -ldflags="-s -w" \
-    -o /out/mailbox \
-    ./cmd/mailbox
-
-FROM alpine:<pinned-version>
-
-RUN addgroup -S mailbox && adduser -S mailbox -G mailbox
-
-WORKDIR /app
-COPY --from=builder /out/mailbox /app/mailbox
-
-RUN mkdir -p /data && chown -R mailbox:mailbox /data /app
-
-USER mailbox
+FROM scratch
+COPY --from=builder /out/litebox /app/litebox
+USER 10001:10001
 EXPOSE 8080
 VOLUME ["/data"]
-
-ENTRYPOINT ["/app/mailbox"]
+HEALTHCHECK CMD ["/app/litebox", "healthcheck"]
+ENTRYPOINT ["/app/litebox"]
 ```
 
-Pin real image versions before release.
+The actual file also carries CA certificates, timezone data, license notices,
+OCI labels, and the private `/data` layout needed by the runtime. Generated UI
+output is committed, so release builds do not require a template compiler.
 
 Do not ship `latest` for the application base image in production.
 
@@ -2639,22 +2676,32 @@ Do not ship `latest` for the application base image in production.
 # 28. Docker Compose
 
 
-The **default** Compose graph contains exactly one required service:
+The production `compose.yaml` is image-only and the graph contains exactly one
+required service:
 
 ```yaml
 services:
   mailbox:
-    build:
-      context: .
+    image: ghcr.io/nader-jo/litebox:<version>
     restart: unless-stopped
     env_file:
-      - .env
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: production
+      LITEBOX_DOMAIN: ${LITEBOX_DOMAIN:?Set LITEBOX_DOMAIN in .env}
+      APP_LISTEN_ADDR: :8080
+      APP_DATA_DIR: /data
+      APP_DB_PATH: /data/mailbox.db
+      STORAGE_BACKEND: filesystem
+      STORAGE_ROOT: /data/objects
+      STORAGE_TMP_ROOT: /data/tmp
     volumes:
       - mailbox-data:/data
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
-      test: ["CMD", "/app/mailbox", "healthcheck"]
+      test: ["CMD", "/app/litebox", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -2670,7 +2717,8 @@ Running:
 docker compose up -d
 ```
 
-starts one mailbox container.
+starts one Litebox container. The optional `proxy` profile adds the supplied
+Caddy service; source builds use `compose.build.yaml` instead.
 
 ## 28.1 Public HTTPS
 
@@ -2707,24 +2755,20 @@ docker compose --profile proxy up -d
 
 The proxy is deployment infrastructure, not a mailbox dependency.
 
-## 28.2 Optional RustFS/S3 topology
+## 28.2 Future S3-compatible topology
 
 RustFS must **not** exist in the default Compose file/graph.
 
-If `S3Store` ships, provide a separate advanced file/profile such as:
+If `S3Store` ships in a future release, provide a separate advanced file/profile
+such as:
 
 ```text
 compose.s3.yaml
 ```
 
-Operators who deliberately choose it configure:
-
-```dotenv
-STORAGE_BACKEND=s3
-S3_ENDPOINT=http://rustfs:9000
-```
-
-This must be documented as optional. Personal/small installations should start with filesystem storage unless they have a concrete reason not to.
+It is not supported by v0.4.1. Personal/small installations should use
+filesystem storage unless a future release explicitly documents the adapter and
+its migration procedure.
 
 ---
 
@@ -2911,13 +2955,9 @@ MVP action:
   - do not download attachments;
   - return no error.
 
-Optional configuration:
-
-```dotenv
-MAILBOX_CATCH_ALL=false
-```
-
-Do not enable catch-all by default.
+There is no catch-all setting in v0.4.1. Unknown recipients are acknowledged
+and ignored; owners add accepted addresses as mailbox aliases in **Settings →
+Mailboxes**.
 
 ---
 
@@ -3236,7 +3276,8 @@ Backups are mandatory because the default one-volume deployment is intentionally
 ```text
 /data/
 ├── mailbox.db
-└── objects/
+├── objects/
+└── .litebox/master.key
 ```
 
 Also preserve deployment secrets/configuration through the operator's secret-management process.
@@ -3255,12 +3296,12 @@ docker compose start mailbox
 
 A second directory on the same physical disk is not a disaster backup.
 
-## 41.3 `mailbox backup`
+## 41.3 `litebox backup`
 
 Implement:
 
 ```text
-mailbox backup --output <directory>
+litebox backup --output <directory>
 ```
 
 MVP contract: run it while the normal server process is stopped.
@@ -3281,19 +3322,25 @@ Because default state lives in one volume, operators can use restic, Borg, files
 
 ## 41.5 S3 backend
 
-If an optional S3 backend is used, back up SQLite separately and give the bucket its own versioning/replication/backup policy. S3-compatible storage by itself is not a backup.
+If an optional S3 backend is added, back up SQLite separately and give the
+bucket its own versioning/replication/backup policy. S3-compatible storage by
+itself is not a backup. No S3 backend is accepted by v0.4.1.
 
 ## 41.6 Restore — filesystem backend
 
-1. stop Mailbox;
-2. restore `/data/mailbox.db`;
-3. restore `/data/objects`;
-4. restore ownership/permissions;
-5. start Mailbox;
-6. run `mailbox doctor`;
-7. rebuild FTS if needed.
+The shipped restore command is deliberately conservative and restores only into
+an empty configured data location:
 
-## 41.7 `mailbox doctor`
+1. provision a fresh data location and restore the deployment configuration;
+2. run `litebox restore --input <backup-directory>`;
+3. run `litebox doctor --deep`;
+4. start Litebox and verify old messages and attachments;
+5. run `litebox reindex` only when doctor or release notes request it.
+
+Restore validates the database, matching master key, and every referenced blob;
+it refuses to overwrite an existing installation.
+
+## 41.7 `litebox doctor`
 
 Check:
 
@@ -3310,7 +3357,7 @@ Check:
 Optional:
 
 ```text
-mailbox doctor --deep
+litebox doctor --deep
 ```
 
 re-hashes all blobs and compares stored SHA-256 values.
@@ -3322,14 +3369,15 @@ re-hashes all blobs and compares stored SHA-256 values.
 The same Go binary should support operational subcommands.
 
 ```text
-mailbox serve
-mailbox migrate
-mailbox healthcheck
-mailbox doctor
-mailbox backup
-mailbox create-admin
-mailbox reset-password
-mailbox reindex
+litebox serve
+litebox migrate
+litebox healthcheck
+litebox doctor
+litebox backup
+litebox restore
+litebox create-admin
+litebox reset-password
+litebox reindex
 ```
 
 This avoids separate administration binaries.
@@ -4143,7 +4191,7 @@ Thread-centric results.
 ### Step 15.5 — Reindex command
 
 ```text
-mailbox reindex
+litebox reindex
 ```
 
 **Exit criteria**
@@ -4704,16 +4752,22 @@ Web-host DNS and mail DNS are separate concerns.
 - backup/restore/doctor;
 - diagnostics.
 
+### Already implemented in v0.4.1
+
+- multiple mailboxes and users;
+- alias-management UI and selectable alias colors;
+- keyboard shortcuts and responsive layouts;
+- database-backed settings with encrypted provider credentials;
+- metadata-only scheduled summaries;
+- invitation and password-reset flows;
+
 ### Explicitly defer
 
 - RustFS/S3 as a required dependency;
 - rich-text composer;
-- keyboard shortcuts;
 - labels/rules;
 - sophisticated spam model;
 - remote image proxy;
-- multiple mailboxes/users;
-- alias-management UI;
 - scheduled send;
 - templates;
 - contacts;
@@ -4735,14 +4789,19 @@ support@abc.com
 billing@abc.com
 ```
 
-One Inbox with alias filters or separate inboxes.
+One independent mailbox can have multiple inbound/outbound identities. Alias
+colors are selectable and the matched identity is shown in thread rows and
+conversation messages.
 
-## 56.2 Multiple users — partially implemented
+## 56.2 Multiple users — implemented
 
 Implemented:
 
 - memberships;
 - per-mailbox permissions.
+- independent mailbox switching with URL-preserved context;
+- per-device session revocation;
+- invitations and password recovery.
 
 Still future:
 
@@ -4796,7 +4855,7 @@ Implementing a standards-compliant mail protocol server is a different project a
 
 The simplest topology puts SQLite and blobs on one volume. Losing it loses mail.
 
-Mitigation: explicit external backups, `mailbox backup`, `mailbox doctor`, tested restore procedures, and optional S3 storage for users with a concrete need.
+Mitigation: explicit external backups, `litebox backup`, `litebox doctor`, tested restore procedures, and a future optional S3 adapter only when users have a concrete need.
 
 ## Risk 2 — Resend API/product changes
 

@@ -30,7 +30,7 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 ## 0.4 — Configurable multi-mailbox operations
 
 - [x] database-backed onboarding and runtime settings with encrypted provider credentials;
-- [x] multiple aliases with light, selectable colors carried into conversation messages;
+- [x] multiple aliases with light, selectable colors carried into thread rows and conversation messages;
 - [x] per-admin daily or weekly metadata-only mailbox summaries with timezone and mailbox scope;
 - [x] backup and restore handling for the installation master key;
 - [x] image-only, multi-platform releases for Linux amd64 and arm64.
