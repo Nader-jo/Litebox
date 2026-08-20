@@ -117,31 +117,79 @@ func (r *Repository) HasUsers(ctx context.Context) (bool, error) {
 // CreateFirstUser atomically creates the installation owner and grants access to
 // the bootstrapped primary mailbox.
 func (r *Repository) CreateFirstUser(ctx context.Context, email, displayName, passwordHash string) (model.User, error) {
-	now := time.Now().UTC()
-	user := model.User{ID: ids.New(), Email: strings.ToLower(strings.TrimSpace(email)), DisplayName: strings.TrimSpace(displayName), PasswordHash: passwordHash, CreatedAt: now}
-	err := r.Transaction(ctx, func(tx *sql.Tx) error {
-		var count int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			return fmt.Errorf("setup is already complete")
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO users
-			(id, email, display_name, password_hash, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?)`, user.ID, user.Email, user.DisplayName, user.PasswordHash, millis(now), millis(now)); err != nil {
-			return err
-		}
-		var mailboxID string
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1").Scan(&mailboxID); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_memberships
-			(user_id, mailbox_id, role, created_by, created_at, updated_at)
-			VALUES (?, ?, 'owner', ?, ?, ?)`, user.ID, mailboxID, user.ID, millis(now), millis(now))
-		return err
+	user, err := initialUser(email, displayName, passwordHash, time.Now().UTC())
+	if err != nil {
+		return model.User{}, err
+	}
+	err = r.Transaction(ctx, func(tx *sql.Tx) error {
+		return createFirstUserTx(ctx, tx, user)
 	})
 	return user, err
+}
+
+// CompleteInitialSetupTx changes the bootstrap mailbox and creates its first
+// owner inside the caller's setup transaction.
+func (r *Repository) CompleteInitialSetupTx(ctx context.Context, tx *sql.Tx, primaryAddress, mailboxName, email, displayName, passwordHash string) (model.User, error) {
+	address, local, domain, err := normalizeAddress(primaryAddress)
+	if err != nil {
+		return model.User{}, err
+	}
+	mailboxName = strings.TrimSpace(mailboxName)
+	if mailboxName == "" || len(mailboxName) > 128 {
+		return model.User{}, fmt.Errorf("display name must be between 1 and 128 characters")
+	}
+	now := time.Now().UTC()
+	user, err := initialUser(email, displayName, passwordHash, now)
+	if err != nil {
+		return model.User{}, err
+	}
+	if err := updatePrimaryMailboxTx(ctx, tx, address, local, domain, mailboxName); err != nil {
+		return model.User{}, err
+	}
+	if err := createFirstUserTx(ctx, tx, user); err != nil {
+		return model.User{}, err
+	}
+	return user, nil
+}
+
+func initialUser(email, displayName, passwordHash string, now time.Time) (model.User, error) {
+	address, _, _, err := normalizeAddress(email)
+	if err != nil {
+		return model.User{}, fmt.Errorf("invalid administrator email")
+	}
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" || len(displayName) > 128 {
+		return model.User{}, fmt.Errorf("display name must be between 1 and 128 characters")
+	}
+	if strings.TrimSpace(passwordHash) == "" {
+		return model.User{}, fmt.Errorf("password hash is required")
+	}
+	return model.User{ID: ids.New(), Email: address, DisplayName: displayName, PasswordHash: passwordHash, CreatedAt: now.UTC()}, nil
+}
+
+func createFirstUserTx(ctx context.Context, tx *sql.Tx, user model.User) error {
+	var mailboxID string
+	if err := tx.QueryRowContext(ctx, `UPDATE mailboxes SET updated_at = updated_at
+		WHERE id = (SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1)
+		RETURNING id`).Scan(&mailboxID); err != nil {
+		return err
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("setup is already complete")
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO users
+		(id, email, display_name, password_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, user.ID, user.Email, user.DisplayName, user.PasswordHash, millis(user.CreatedAt), millis(user.CreatedAt)); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO mailbox_memberships
+		(user_id, mailbox_id, role, created_by, created_at, updated_at)
+		VALUES (?, ?, 'owner', ?, ?, ?)`, user.ID, mailboxID, user.ID, millis(user.CreatedAt), millis(user.CreatedAt))
+	return err
 }
 
 // FindUserByEmail finds an enabled user using normalized email comparison.

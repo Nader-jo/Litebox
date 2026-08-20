@@ -24,9 +24,9 @@ Create an active ruleset targeting `develop` with these protections:
 - require changes through pull requests and require all conversations to be
   resolved;
 - require branches to be up to date or use a merge queue;
-- require `Test, lint, and build`, `Container and Compose`, `Repository
-  configuration`, `Go vulnerability scan`, `CodeQL`, `Dependency review`, and
-  `GitHub Actions security` checks;
+- require the exact checks emitted for pull requests: `Test, lint, and build`,
+  `Container (linux/amd64)`, `Container (linux/arm64)`, `Go vulnerability scan`,
+  `CodeQL`, `Dependency review`, and `GitHub Actions security`;
 - require code-owner review and one independent approval once a second
   maintainer or regular reviewer is available;
 - limit bypass permission to maintainers for documented emergencies.

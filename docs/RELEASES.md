@@ -4,7 +4,9 @@ Litebox follows Semantic Versioning. Before 1.0, minor versions may contain docu
 
 ## Automated artifacts
 
-Pushing a signed `v*` tag runs `.github/workflows/release.yml` after tests. The pipeline publishes:
+Pushing an annotated `v*` tag runs `.github/workflows/release.yml` after tests.
+Cryptographic tag signing is preferred but is not currently enforced. The
+pipeline publishes:
 
 - a GitHub release with generated notes and no application archives;
 - one multi-platform GHCR image for Linux amd64 and arm64;
@@ -26,12 +28,16 @@ GitHub Actions dependencies are pinned to immutable commit SHAs with human-reada
 3. Run `make check`.
 4. Build and smoke-test the container as a non-root user on both Linux amd64 and arm64.
 5. Perform a backup/restore drill for schema or storage changes.
-6. Update `CHANGELOG.md`, migration notes, docs, and supported-version policy.
-7. Choose the SemVer version and create an annotated, preferably signed, tag from a commit contained in `develop`.
-8. Push the tag and watch the release workflow.
-9. Verify the GHCR platforms, OCI labels, image attestation, vulnerability scans, and release notes.
-10. Deploy the exact image tag to a test installation and run `litebox doctor --deep`.
-11. Announce material security or migration notes clearly.
+6. Update `CHANGELOG.md`, migration notes, docs, citation metadata, and the supported-version policy.
+7. Verify the release version is consistent in `compose.yaml`, `.env.example`,
+   `README.md`, `CHANGELOG.md`, `CITATION.cff`, and `SECURITY.md`; render Compose
+   with the example environment and confirm neither the service image nor its
+   fallback resolves to `latest`.
+8. Choose the SemVer version and create an annotated, preferably signed, tag from a commit contained in `develop`.
+9. Push the tag and watch the release workflow.
+10. Verify the GHCR platforms, OCI labels, image attestation, vulnerability scans, and release notes.
+11. Deploy the exact image tag to a test installation and run `litebox doctor --deep`.
+12. Announce material security or migration notes clearly.
 
 Verify the container image and inspect its platforms:
 
@@ -55,6 +61,16 @@ git push origin v0.4.1
 
 Do not move or recreate a public version tag. If verification fails while the release is still a draft, fix the cause and publish a new version tag. If users could have consumed any image tag or artifact, document the partial release and publish a new patch version. Container tags derived from SemVer are treated as immutable.
 
+### v0.4.1 deployment-template erratum
+
+The public `v0.4.1` source tag predates corrections that pinned the Compose
+fallback and `.env.example` image consistently and aligned release metadata.
+The tag is intentionally immutable. Deployers of image `0.4.1` should use the
+corrected current deployment templates with an explicit
+`LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.1` pin. The next patch release must
+include the corrected templates and pass the consistency check above before its
+tag is created.
+
 ## Database compatibility
 
 Every release note must state whether a migration runs and whether rollback requires restoring a backup. The project does not automatically downgrade SQLite schemas.
@@ -65,4 +81,7 @@ adds the required `LITEBOX_DOMAIN` deployment variable; no additional database
 migration is needed for that setting.
 Back up `/data`—including
 `/data/.litebox/master.key`—before upgrading. Restoring the database without
-the matching master key requires entering provider credentials again.
+the matching master key does not produce a runnable installation; provider
+credentials cannot be re-entered because settings decryption happens before the
+UI starts. The supported `litebox backup` and `restore` commands carry the key
+with the database and blobs.

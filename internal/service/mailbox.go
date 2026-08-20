@@ -4,6 +4,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"mime"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nader-jo/Litebox/internal/blobstore"
@@ -25,7 +27,7 @@ import (
 
 // Mailbox owns recoverable application workflows.
 type Mailbox struct {
-	config     config.Config
+	config     atomic.Pointer[config.Config]
 	repository *repository.Repository
 	store      blobstore.Store
 	provider   provider.Client
@@ -33,11 +35,18 @@ type Mailbox struct {
 
 // NewMailbox creates a mailbox service.
 func NewMailbox(cfg config.Config, repo *repository.Repository, store blobstore.Store, client provider.Client) *Mailbox {
-	return &Mailbox{config: cfg, repository: repo, store: store, provider: client}
+	mailbox := &Mailbox{repository: repo, store: store, provider: client}
+	mailbox.ApplyConfig(cfg)
+	return mailbox
 }
 
 // ApplyConfig updates settings that are safe to reload while the process runs.
-func (s *Mailbox) ApplyConfig(cfg config.Config) { s.config = cfg }
+func (s *Mailbox) ApplyConfig(cfg config.Config) {
+	snapshot := cfg
+	s.config.Store(&snapshot)
+}
+
+func (s *Mailbox) currentConfig() config.Config { return *s.config.Load() }
 
 // JobHandlers returns every supported durable work kind.
 func (s *Mailbox) JobHandlers() map[string]jobs.Handler {
@@ -71,6 +80,7 @@ func (s *Mailbox) ingestJob(ctx context.Context, job model.Job) error {
 
 // Ingest retrieves, archives, sanitizes, indexes, and threads one received email.
 func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID string, bestEffort bool) error {
+	cfg := s.currentConfig()
 	received, err := s.provider.GetReceived(ctx, resendEmailID)
 	if err != nil {
 		return err
@@ -104,30 +114,34 @@ func (s *Mailbox) Ingest(ctx context.Context, webhookEventID, resendEmailID stri
 	if err != nil {
 		return jobs.Permanent(fmt.Errorf("provider returned an invalid sender"))
 	}
-	if len(received.Text) > int(s.config.MaxMessageTextBytes) {
-		received.Text = received.Text[:s.config.MaxMessageTextBytes]
+	if int64(len(received.Text)) > cfg.MaxMessageTextBytes {
+		received.Text = received.Text[:cfg.MaxMessageTextBytes]
 	}
-	if len(received.HTML) > int(s.config.MaxMessageTextBytes) {
-		received.HTML = received.HTML[:s.config.MaxMessageTextBytes]
+	if int64(len(received.HTML)) > cfg.MaxMessageTextBytes {
+		received.HTML = received.HTML[:cfg.MaxMessageTextBytes]
 	}
 	for _, mailbox := range mailboxes {
 		address, addressErr := s.repository.MailboxAddressForRecipients(ctx, mailbox.ID, localRecipients)
 		if addressErr != nil && !errors.Is(addressErr, repository.ErrNotFound) {
 			return addressErr
 		}
-		if err := s.ingestIntoMailbox(ctx, mailbox, address.ID, received, from, to, cc, bcc, replyTo, bestEffort); err != nil {
+		if err := s.ingestIntoMailbox(ctx, cfg, mailbox, address.ID, received, from, to, cc, bcc, replyTo, bestEffort); err != nil {
 			return err
 		}
 	}
 	return s.repository.CompleteWebhook(ctx, webhookEventID, "succeeded")
 }
 
-func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, mailboxAddressID string, received provider.ReceivedEmail,
+func (s *Mailbox) ingestIntoMailbox(ctx context.Context, cfg config.Config, mailbox model.Mailbox, mailboxAddressID string, received provider.ReceivedEmail,
 	from model.Address, to, cc, bcc, replyTo []model.Address, bestEffort bool) error {
 	var attachments []model.Attachment
+	attachmentMetadata := received.Attachments
+	if len(attachmentMetadata) > cfg.MaxAttachmentCount {
+		attachmentMetadata = attachmentMetadata[:cfg.MaxAttachmentCount]
+	}
 	cidRoutes := make(map[string]string)
 	now := received.CreatedAt
-	for _, metadata := range received.Attachments {
+	for _, metadata := range attachmentMetadata {
 		attachmentID := ids.Stable("resend-attachment", mailbox.ID+"/"+received.ID+"/"+metadata.ID)
 		if metadata.ContentID != "" {
 			cidRoutes[strings.Trim(metadata.ContentID, "<>")] = "/attachments/" + attachmentID + "/inline"
@@ -152,7 +166,7 @@ func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, 
 		rawKey := blobstore.Key("raw", ids.Stable("resend-raw", mailbox.ID+"/"+received.ID), now)
 		body, expected, downloadErr := s.provider.Download(ctx, received.RawURL)
 		if downloadErr == nil {
-			info, putErr := s.store.Put(ctx, rawKey, body, expected, "message/rfc822")
+			info, putErr := s.putInboundBlob(ctx, rawKey, body, expected, "message/rfc822", cfg.MaxUploadRequestBytes)
 			body.Close()
 			if putErr == nil {
 				input.RawStorageKey, input.SizeBytes = rawKey, info.Size
@@ -161,26 +175,37 @@ func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, 
 			}
 		}
 		if downloadErr != nil {
-			if !bestEffort {
+			if errors.Is(downloadErr, errInboundBlobLimit) {
+				input.IngestStatus = "ready_without_raw"
+			} else if !bestEffort {
 				return &SafeError{Message: "raw email archival failed", Temporary: true, Cause: downloadErr}
+			} else {
+				input.IngestStatus = "ready_without_raw"
 			}
-			input.IngestStatus = "ready_without_raw"
 		}
 	}
-	for _, metadata := range received.Attachments {
+	remainingAttachmentBytes := cfg.MaxOutboundAttachmentBytes
+	for _, metadata := range attachmentMetadata {
 		attachmentID := ids.Stable("resend-attachment", mailbox.ID+"/"+received.ID+"/"+metadata.ID)
 		attachment := model.Attachment{ID: attachmentID, ProviderAttachmentID: metadata.ID, Filename: metadata.Filename,
 			SafeFilename: SafeFilename(metadata.Filename), ContentType: defaultContentType(metadata.ContentType),
 			ContentDisposition: defaultDisposition(metadata.ContentDisposition), ContentID: strings.Trim(metadata.ContentID, "<>"),
 			StorageBackend: "filesystem", StorageKey: blobstore.Key("attachments", attachmentID, now), CreatedAt: time.Now().UTC(), StorageStatus: "ready"}
-		details, getErr := s.provider.GetReceivedAttachment(ctx, received.ID, metadata.ID)
+		var getErr error
+		var details provider.ReceivedAttachment
+		if remainingAttachmentBytes <= 0 {
+			getErr = errInboundBlobLimit
+		} else {
+			details, getErr = s.provider.GetReceivedAttachment(ctx, received.ID, metadata.ID)
+		}
 		if getErr == nil {
 			body, expected, downloadErr := s.provider.Download(ctx, details.DownloadURL)
 			if downloadErr == nil {
-				info, putErr := s.store.Put(ctx, attachment.StorageKey, body, expected, attachment.ContentType)
+				info, putErr := s.putInboundBlob(ctx, attachment.StorageKey, body, expected, attachment.ContentType, remainingAttachmentBytes)
 				body.Close()
 				if putErr == nil {
 					attachment.SizeBytes, attachment.SHA256 = info.Size, info.SHA256
+					remainingAttachmentBytes -= info.Size
 				} else {
 					downloadErr = putErr
 				}
@@ -188,10 +213,13 @@ func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, 
 			getErr = downloadErr
 		}
 		if getErr != nil {
-			if !bestEffort {
+			if errors.Is(getErr, errInboundBlobLimit) {
+				attachment.StorageStatus = "error"
+			} else if !bestEffort {
 				return &SafeError{Message: "attachment archival failed", Temporary: true, Cause: getErr}
+			} else {
+				attachment.StorageStatus = "error"
 			}
-			attachment.StorageStatus = "error"
 		}
 		attachments = append(attachments, attachment)
 	}
@@ -208,6 +236,39 @@ func (s *Mailbox) ingestIntoMailbox(ctx context.Context, mailbox model.Mailbox, 
 	return nil
 }
 
+var errInboundBlobLimit = errors.New("inbound blob limit exceeded")
+
+func (s *Mailbox) putInboundBlob(ctx context.Context, key string, body io.Reader, expected int64, contentType string, limit int64) (blobstore.BlobInfo, error) {
+	if limit < 0 || expected > limit {
+		return blobstore.BlobInfo{}, errInboundBlobLimit
+	}
+	info, err := s.store.Put(ctx, key, &boundedInboundReader{reader: body, remaining: limit}, expected, contentType)
+	if errors.Is(err, errInboundBlobLimit) {
+		return blobstore.BlobInfo{}, errInboundBlobLimit
+	}
+	return info, err
+}
+
+type boundedInboundReader struct {
+	reader    io.Reader
+	remaining int64
+}
+
+func (r *boundedInboundReader) Read(buffer []byte) (int, error) {
+	if r.remaining < 0 {
+		return 0, errInboundBlobLimit
+	}
+	if int64(len(buffer)) > r.remaining+1 {
+		buffer = buffer[:r.remaining+1]
+	}
+	count, err := r.reader.Read(buffer)
+	r.remaining -= int64(count)
+	if r.remaining < 0 {
+		return count, errInboundBlobLimit
+	}
+	return count, err
+}
+
 type sendPayload struct {
 	MessageID string `json:"message_id"`
 }
@@ -222,6 +283,7 @@ func (s *Mailbox) sendJob(ctx context.Context, job model.Job) error {
 
 // Send submits one queued message with stable application and provider idempotency.
 func (s *Mailbox) Send(ctx context.Context, messageID string) error {
+	cfg := s.currentConfig()
 	message, err := s.repository.OutboundMessage(ctx, messageID)
 	if err != nil {
 		return err
@@ -244,13 +306,18 @@ func (s *Mailbox) Send(ctx context.Context, messageID string) error {
 		if err != nil {
 			return &SafeError{Message: "outbound attachment storage is unavailable", Temporary: true, Cause: err}
 		}
-		contents, err := io.ReadAll(io.LimitReader(body, s.config.MaxOutboundAttachmentBytes-total+1))
+		contents, err := io.ReadAll(io.LimitReader(body, cfg.MaxOutboundAttachmentBytes-total+1))
 		body.Close()
 		if err != nil {
 			return &SafeError{Message: "outbound attachment could not be read", Temporary: true, Cause: err}
 		}
+		digest := fmt.Sprintf("%x", sha256.Sum256(contents))
+		if int64(len(contents)) != attachment.SizeBytes || attachment.SHA256 != "" && !strings.EqualFold(digest, attachment.SHA256) {
+			_ = s.repository.MarkMessageSendError(ctx, message.ID, "attachment_integrity", "An attachment failed its integrity check.", true)
+			return jobs.Permanent(fmt.Errorf("outbound attachment %q failed integrity validation", attachment.ID))
+		}
 		total += int64(len(contents))
-		if total > s.config.MaxOutboundAttachmentBytes {
+		if total > cfg.MaxOutboundAttachmentBytes {
 			_ = s.repository.MarkMessageSendError(ctx, message.ID, "attachment_limit", "Attachments exceed the configured limit.", true)
 			return jobs.Permanent(fmt.Errorf("outbound attachments exceed configured limit"))
 		}
@@ -294,6 +361,9 @@ func (s *Mailbox) SendDigest(ctx context.Context, subscriptionID string, since, 
 	if err != nil {
 		return err
 	}
+	if !sub.Enabled {
+		return jobs.Permanent(fmt.Errorf("digest subscription is disabled"))
+	}
 	counts, err := s.repository.DigestCounts(ctx, sub, since, until)
 	if err != nil {
 		return err
@@ -324,8 +394,12 @@ func (s *Mailbox) sendDigest(ctx context.Context, sub model.DigestSubscription, 
 	if err != nil {
 		return err
 	}
+	location, err := time.LoadLocation(sub.Timezone)
+	if err != nil {
+		return jobs.Permanent(fmt.Errorf("invalid digest timezone %q", sub.Timezone))
+	}
 	body := fmt.Sprintf("Litebox mailbox summary\n\nPeriod: %s – %s\nReceived: %d\nUnread: %d\nSent: %d\n\n",
-		counts.Since.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Until.In(time.Local).Format("Jan 2, 2006 15:04"), counts.Received, counts.Unread, counts.Sent)
+		counts.Since.In(location).Format("Jan 2, 2006 15:04"), counts.Until.In(location).Format("Jan 2, 2006 15:04"), counts.Received, counts.Unread, counts.Sent)
 	for _, mailbox := range counts.ByMailbox {
 		body += fmt.Sprintf("%s — received %d, unread %d, sent %d\n", mailbox.Address, mailbox.Received, mailbox.Unread, mailbox.Sent)
 	}
@@ -351,6 +425,10 @@ func (s *Mailbox) providerEventJob(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	fail := func(err error) error {
+		_ = s.repository.FailWebhook(ctx, event.ID, safeMessage(err))
+		return err
+	}
 	var body struct {
 		Type      string    `json:"type"`
 		CreatedAt time.Time `json:"created_at"`
@@ -359,19 +437,14 @@ func (s *Mailbox) providerEventJob(ctx context.Context, job model.Job) error {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(event.RawPayload), &body); err != nil || body.Data.EmailID == "" {
-		return jobs.Permanent(fmt.Errorf("invalid provider event payload"))
+		return fail(jobs.Permanent(fmt.Errorf("invalid provider event payload")))
 	}
-	current, currentAt, err := s.repository.MessageDelivery(ctx, body.Data.EmailID)
-	if errors.Is(err, repository.ErrNotFound) {
-		// The provider event may precede the local post-send update; retry safely.
-		return &SafeError{Message: "outbound message is not yet reconciled", Temporary: true, Cause: err}
-	}
-	if err != nil {
-		return err
-	}
-	status := mailx.ReduceDelivery(current, currentAt, body.Type, body.CreatedAt)
-	if err := s.repository.StoreProviderEvent(ctx, event.SvixID, body.Data.EmailID, body.Type, event.RawPayload, status, body.CreatedAt); err != nil {
-		return err
+	if err := s.repository.StoreProviderEvent(ctx, event.SvixID, body.Data.EmailID, body.Type, event.RawPayload, body.CreatedAt); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			// The provider event may precede the local post-send update; retry safely.
+			return fail(&SafeError{Message: "outbound message is not yet reconciled", Temporary: true, Cause: err})
+		}
+		return fail(err)
 	}
 	return s.repository.CompleteWebhook(ctx, event.ID, "succeeded")
 }

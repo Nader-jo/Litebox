@@ -3,14 +3,29 @@
 **File:** `mailbox_prd.md`
 **Document version:** 2.1
 **Date:** 2026-08-20
-**Status:** Current implementation and product requirements for v0.4.1
+**Status:** Historical design and planning record; not a current operational specification
 **Primary implementation language:** Go
 **Deployment:** Docker Compose
 **Database:** SQLite
 **Durable blob storage:** Local filesystem in the shipped MVP; S3-compatible storage remains a future adapter
 **Email transport:** Resend Sending + Receiving APIs and webhooks
 
-> **Implementation status (v0.4.1):** The code now implements the one-container filesystem architecture, multiple independent mailboxes, aliases with colors, per-mailbox memberships, database-backed encrypted settings, metadata-only summaries, single-use invitations, password recovery, and URL-preserved mailbox context. This file retains the original product requirements and implementation plan; where a later section says “MVP,” the current behavior is defined by the code and the operator/user guides linked from `README.md`.
+> [!CAUTION]
+> This PRD preserves the original requirements, proposed schema, route sketches,
+> CLI ideas, and phased implementation plan for historical context. Those
+> sections are intentionally not rewritten as the code evolves and may be stale
+> or contradictory. Do not use this file as a deployment, recovery, security, or
+> API runbook. Current behavior is defined by the code and the reviewed guides
+> linked from `README.md`, especially `docs/CONFIGURATION.md`,
+> `docs/DEPLOYMENT.md`, `docs/BACKUP_AND_RESTORE.md`, and
+> `docs/ARCHITECTURE.md`.
+
+> **v0.4.1 snapshot:** At that milestone the code implemented the one-container
+> filesystem architecture, multiple independent mailboxes, aliases with colors,
+> per-mailbox memberships, database-backed encrypted settings, metadata-only
+> summaries, single-use invitations, password recovery, and URL-preserved
+> mailbox context. Later Unreleased behavior is not retrofitted throughout this
+> historical plan.
 
 ---
 

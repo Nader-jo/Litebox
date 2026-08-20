@@ -13,6 +13,11 @@ import (
 const jobColumns = `id, kind, dedupe_key, payload_json, status, priority, attempt_count,
     max_attempts, run_after, leased_until, lease_owner, last_error, created_at, updated_at`
 
+// ErrLeaseLost means a worker no longer owns the running job it attempted to
+// renew or finalize. Callers must not retry the mutation without claiming the
+// job again.
+var ErrLeaseLost = errors.New("job lease lost")
+
 // EnqueueJob creates durable work and quietly deduplicates an existing logical job.
 func (r *Repository) EnqueueJob(ctx context.Context, kind, dedupeKey, payload string, priority, maxAttempts int, runAfter time.Time) (string, bool, error) {
 	return enqueueJob(ctx, r.db, kind, dedupeKey, payload, priority, maxAttempts, runAfter)
@@ -61,25 +66,52 @@ func (r *Repository) ClaimJob(ctx context.Context, worker string, lease time.Dur
 	return job, err
 }
 
-// CompleteJob records a successful terminal job state.
-func (r *Repository) CompleteJob(ctx context.Context, id string) error {
-	now := millis(time.Now())
-	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = 'succeeded', lease_owner = NULL,
-        leased_until = NULL, completed_at = ?, updated_at = ?, last_error = NULL WHERE id = ?`, now, now, id)
-	return err
+// RenewJobLease extends a running job lease only while owner still holds it.
+func (r *Repository) RenewJobLease(ctx context.Context, id, owner string, lease time.Duration) error {
+	now := time.Now().UTC()
+	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET leased_until = ?, updated_at = ?
+		WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+		millis(now.Add(lease)), millis(now), id, owner)
+	return fencedJobMutation(result, err)
 }
 
-// FailJob records an error and either reschedules or dead-letters the job.
-func (r *Repository) FailJob(ctx context.Context, id, message string, retryAt time.Time, permanent bool) error {
+// CompleteJob records a successful terminal job state only while owner still
+// holds the running lease.
+func (r *Repository) CompleteJob(ctx context.Context, id, owner string) error {
+	now := millis(time.Now())
+	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = 'succeeded', lease_owner = NULL,
+		leased_until = NULL, completed_at = ?, updated_at = ?, last_error = NULL
+		WHERE id = ? AND status = 'running' AND lease_owner = ?`, now, now, id, owner)
+	return fencedJobMutation(result, err)
+}
+
+// FailJob records an error and either reschedules or dead-letters the job only
+// while owner still holds the running lease.
+func (r *Repository) FailJob(ctx context.Context, id, owner, message string, retryAt time.Time, permanent bool) error {
 	status := "failed"
 	if permanent {
 		status = "dead"
 	}
-	_, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = CASE
-            WHEN ? = 'dead' OR attempt_count >= max_attempts THEN 'dead' ELSE 'failed' END,
-        run_after = ?, lease_owner = NULL, leased_until = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
-		status, millis(retryAt), message, millis(time.Now()), id)
-	return err
+	result, err := r.db.ExecContext(ctx, `UPDATE jobs SET status = CASE
+			WHEN ? = 'dead' OR attempt_count >= max_attempts THEN 'dead' ELSE 'failed' END,
+		run_after = ?, lease_owner = NULL, leased_until = NULL, last_error = ?, updated_at = ?
+		WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+		status, millis(retryAt), message, millis(time.Now()), id, owner)
+	return fencedJobMutation(result, err)
+}
+
+func fencedJobMutation(result sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 // ListJobs returns recent jobs for diagnostics.

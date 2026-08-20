@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/Nader-jo/Litebox/internal/auth"
+	"github.com/Nader-jo/Litebox/internal/config"
 	"github.com/Nader-jo/Litebox/internal/ids"
 	mailx "github.com/Nader-jo/Litebox/internal/mail"
 	"github.com/Nader-jo/Litebox/internal/model"
@@ -38,16 +40,29 @@ func (s *Server) live(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	if err := s.repository.Ping(ctx); err != nil {
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
-		return
-	}
-	if err := s.store.Health(ctx); err != nil {
+	if err := s.readiness(ctx); err != nil {
 		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = io.WriteString(w, `{"status":"ready"}`)
+}
+
+func (s *Server) readiness(ctx context.Context) error {
+	s.readinessMu.Lock()
+	defer s.readinessMu.Unlock()
+	if !s.readinessAt.IsZero() && time.Since(s.readinessAt) < 5*time.Second {
+		return s.readinessErr
+	}
+	err := s.repository.Ping(ctx)
+	if err == nil {
+		err = s.store.Health(ctx)
+	}
+	// Do not turn one canceled probe into a cached outage for other callers.
+	if ctx.Err() == nil {
+		s.readinessAt, s.readinessErr = time.Now(), err
+	}
+	return err
 }
 
 func (s *Server) root(w http.ResponseWriter, r *http.Request) {
@@ -65,7 +80,7 @@ func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := r.URL.Query().Get("token")
-	if s.config.Environment == "production" && s.settings != nil {
+	if s.currentConfig().Environment == "production" && s.settings != nil {
 		valid, err := s.settings.VerifySetupToken(r.Context(), token)
 		if err != nil {
 			s.internalError(w, r, err)
@@ -80,6 +95,16 @@ func (s *Server) setupPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	if err := r.ParseForm(); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.renderError(w, r, http.StatusRequestEntityTooLarge, "The setup form is too large.")
+			return
+		}
+		s.renderError(w, r, http.StatusBadRequest, "Invalid setup form.")
+		return
+	}
 	hasUsers, err := s.repository.HasUsers(r.Context())
 	if err != nil {
 		s.internalError(w, r, err)
@@ -90,7 +115,7 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := r.FormValue("token")
-	if s.config.Environment == "production" && s.settings != nil {
+	if s.currentConfig().Environment == "production" && s.settings != nil {
 		valid, err := s.settings.VerifySetupToken(r.Context(), token)
 		if err != nil {
 			s.internalError(w, r, err)
@@ -101,19 +126,16 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	if err := r.ParseForm(); err != nil {
-		s.renderError(w, r, http.StatusBadRequest, "Invalid setup form.")
-		return
-	}
-	emailAddress := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
-	if _, err := mail.ParseAddress(emailAddress); err != nil {
+	emailAddress := strings.TrimSpace(r.FormValue("email"))
+	if parsed, err := mail.ParseAddress(emailAddress); err != nil || !strings.EqualFold(parsed.Address, emailAddress) {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid administrator email.")))
 		return
+	} else {
+		emailAddress = strings.ToLower(parsed.Address)
 	}
 	primaryAddress := strings.TrimSpace(r.FormValue("primary_address"))
 	if primaryAddress == "" {
-		primaryAddress = s.config.PrimaryAddress
+		primaryAddress = s.currentConfig().PrimaryAddress
 	}
 	if parsed, err := mail.ParseAddress(primaryAddress); err != nil || !strings.EqualFold(parsed.Address, primaryAddress) {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid mailbox address.")))
@@ -123,19 +145,19 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	}
 	mailboxName := strings.TrimSpace(r.FormValue("mailbox_display_name"))
 	if mailboxName == "" {
-		mailboxName = s.config.DisplayName
+		mailboxName = s.currentConfig().DisplayName
 	}
 	baseURL := strings.TrimSpace(r.FormValue("base_url"))
 	if baseURL == "" {
-		baseURL = s.config.BaseURL.String()
+		baseURL = s.currentConfig().BaseURL.String()
 	}
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || (s.config.Environment == "production" && parsedURL.Scheme != "https") {
+	parsedURL, err := config.ParseBaseURL(baseURL, s.currentConfig().Environment == "production")
+	if err != nil {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Enter a valid public URL (HTTPS is required in production).")))
 		return
 	}
 	apiKey, webhookSecret, domainID := strings.TrimSpace(r.FormValue("resend_api_key")), strings.TrimSpace(r.FormValue("resend_webhook_secret")), strings.TrimSpace(r.FormValue("resend_domain_id"))
-	if s.config.Environment == "production" && (apiKey == "" || webhookSecret == "") {
+	if s.currentConfig().Environment == "production" && (apiKey == "" || webhookSecret == "") {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "Resend API key and webhook secret are required in production.")))
 		return
 	}
@@ -144,36 +166,46 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "The passwords do not match.")))
 		return
 	}
-	hash, err := auth.HashPassword(password)
+	hash, err := s.hashPassword(r.Context(), password)
 	if err != nil {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, err.Error())))
 		return
 	}
-	if err := s.repository.UpdatePrimaryMailbox(r.Context(), primaryAddress, mailboxName); err != nil {
-		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
-	current := s.config
+	current := s.currentConfig()
 	current.BaseURL = parsedURL
 	current.PrimaryAddress = primaryAddress
 	current.DisplayName = mailboxName
 	current.ResendAPIKey, current.ResendWebhookSecret, current.ResendDomainID = apiKey, webhookSecret, domainID
-	if s.settings != nil {
-		value := settings.Values{Configured: true, BaseURL: parsedURL.String(), SessionTTLHours: int(current.SessionTTL / time.Hour), LogLevel: current.LogLevel,
-			MaxWebhookBodyBytes: current.MaxWebhookBodyBytes, MaxMessageTextBytes: current.MaxMessageTextBytes, MaxUploadRequestBytes: current.MaxUploadRequestBytes,
-			MaxOutboundAttachmentBytes: current.MaxOutboundAttachmentBytes, MaxAttachmentCount: current.MaxAttachmentCount,
-			ResendAPIKey: apiKey, ResendWebhookSecret: webhookSecret, ResendDomainID: domainID}
-		if err := s.settings.Save(r.Context(), value); err != nil {
-			s.internalError(w, r, err)
-			return
-		}
+	current.AllowUnconfigured = false
+	allowedRecipients := make(map[string]struct{}, len(current.AllowedRecipients)+1)
+	for address := range current.AllowedRecipients {
+		allowedRecipients[address] = struct{}{}
 	}
-	if _, err := s.repository.CreateFirstUser(r.Context(), emailAddress, r.FormValue("display_name"), hash); err != nil {
-		s.internalError(w, r, err)
+	allowedRecipients[strings.ToLower(primaryAddress)] = struct{}{}
+	current.AllowedRecipients = allowedRecipients
+	if err := current.Validate(); err != nil {
+		s.render(w, r, http.StatusUnprocessableEntity, ui.SetupPage(s.setupData(token, "The installation settings are invalid: "+err.Error())))
 		return
 	}
-	if s.settings != nil {
-		_ = s.settings.ConsumeSetupToken(r.Context())
+	if s.settings == nil {
+		s.internalError(w, r, errors.New("installation settings are unavailable"))
+		return
+	}
+	value := settings.Values{Configured: true, BaseURL: parsedURL.String(), SessionTTLHours: int(current.SessionTTL / time.Hour), LogLevel: current.LogLevel,
+		MaxWebhookBodyBytes: current.MaxWebhookBodyBytes, MaxMessageTextBytes: current.MaxMessageTextBytes, MaxUploadRequestBytes: current.MaxUploadRequestBytes,
+		MaxOutboundAttachmentBytes: current.MaxOutboundAttachmentBytes, MaxAttachmentCount: current.MaxAttachmentCount,
+		ResendAPIKey: apiKey, ResendWebhookSecret: webhookSecret, ResendDomainID: domainID}
+	err = s.settings.CompleteSetup(r.Context(), token, current.Environment == "production", value, func(tx *sql.Tx) error {
+		_, err := s.repository.CompleteInitialSetupTx(r.Context(), tx, primaryAddress, mailboxName, emailAddress, r.FormValue("display_name"), hash)
+		return err
+	})
+	if errors.Is(err, settings.ErrSetupUnavailable) {
+		s.renderError(w, r, http.StatusForbidden, "The setup link is invalid, expired, or already used.")
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
 	}
 	if s.applyConfig != nil {
 		s.applyConfig(current)
@@ -182,9 +214,10 @@ func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setupData(token, message string) ui.PageData {
-	return ui.PageData{Title: "First-run setup", PrimaryAddress: s.config.PrimaryAddress, SetupToken: token,
-		SetupBaseURL: s.config.BaseURL.String(), SetupMailboxName: s.config.DisplayName,
-		SetupDomainID: s.config.ResendDomainID, Error: message}
+	cfg := s.currentConfig()
+	return ui.PageData{Title: "First-run setup", PrimaryAddress: cfg.PrimaryAddress, SetupToken: token,
+		SetupBaseURL: cfg.BaseURL.String(), SetupMailboxName: cfg.DisplayName,
+		SetupDomainID: cfg.ResendDomainID, Error: message}
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
@@ -197,24 +230,39 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/setup", http.StatusSeeOther)
 		return
 	}
-	s.render(w, r, http.StatusOK, ui.LoginPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Notice: noticeMessage(r.URL.Query().Get("notice"))}))
+	s.render(w, r, http.StatusOK, ui.LoginPage(ui.PageData{PrimaryAddress: s.currentConfig().PrimaryAddress, Notice: noticeMessage(r.URL.Query().Get("notice"))}))
 }
 
 func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, r, http.StatusBadRequest, "Invalid sign-in form.")
+		return
+	}
 	emailAddress := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
-	key := s.clientIP(r) + "\x00" + emailAddress
-	if !s.login.allow(key) {
-		time.Sleep(500 * time.Millisecond)
-		s.render(w, r, http.StatusTooManyRequests, ui.LoginPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Error: "Too many sign-in attempts. Try again later."}))
+	ip := s.clientIP(r)
+	accountKey := emailAddress
+	if !s.takeLoginAttempt(ip, accountKey) {
+		s.render(w, r, http.StatusTooManyRequests, ui.LoginPage(ui.PageData{PrimaryAddress: s.currentConfig().PrimaryAddress, Error: "Too many sign-in attempts. Try again later."}))
 		return
 	}
 	user, err := s.repository.FindUserByEmail(r.Context(), emailAddress)
-	if err != nil || !auth.VerifyPassword(r.FormValue("password"), user.PasswordHash) {
-		s.login.fail(key)
-		time.Sleep(250 * time.Millisecond)
-		s.render(w, r, http.StatusUnauthorized, ui.LoginPage(ui.PageData{PrimaryAddress: s.config.PrimaryAddress, Error: "Invalid email or password."}))
+	passwordHash := s.dummyPassword
+	if err == nil {
+		passwordHash = user.PasswordHash
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		s.internalError(w, r, err)
+		return
+	}
+	select {
+	case s.passwordSlots <- struct{}{}:
+	case <-r.Context().Done():
+		return
+	}
+	passwordValid := auth.VerifyPassword(r.FormValue("password"), passwordHash)
+	<-s.passwordSlots
+	if err != nil || !passwordValid {
+		s.render(w, r, http.StatusUnauthorized, ui.LoginPage(ui.PageData{PrimaryAddress: s.currentConfig().PrimaryAddress, Error: "Invalid email or password."}))
 		return
 	}
 	sessionToken, err := auth.NewToken()
@@ -228,13 +276,13 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID, err := s.repository.CreateSession(r.Context(), user.ID, auth.TokenHash(sessionToken), auth.TokenHash(csrfToken),
-		time.Now().Add(s.config.SessionTTL), ipHash(s.clientIP(r)), truncate(r.UserAgent(), 512))
+		time.Now().Add(s.currentConfig().SessionTTL), ipHash(s.clientIP(r)), truncate(r.UserAgent(), 512))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
 	_ = s.repository.TouchSession(r.Context(), sessionID, user.ID, true)
-	s.login.success(key)
+	s.loginAccount.reset(accountKey)
 	s.setSessionCookies(w, sessionToken, csrfToken)
 	http.Redirect(w, r, "/inbox", http.StatusSeeOther)
 }
@@ -251,7 +299,10 @@ func (s *Server) invitationPage(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, r, http.StatusBadRequest, "Invalid invitation form.")
+		return
+	}
 	token := strings.TrimSpace(r.FormValue("token"))
 	invitation, err := s.repository.InvitationByToken(r.Context(), auth.TokenHash(token))
 	if err != nil {
@@ -263,7 +314,7 @@ func (s *Server) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.InvitationPage(ui.PageData{Title: "Accept invitation", Token: token, Invitation: invitation, Error: "The passwords do not match."}))
 		return
 	}
-	hash, err := auth.HashPassword(password)
+	hash, err := s.hashPassword(r.Context(), password)
 	if err != nil {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.InvitationPage(ui.PageData{Title: "Accept invitation", Token: token, Invitation: invitation, Error: err.Error()}))
 		return
@@ -284,24 +335,44 @@ func (s *Server) passwordResetPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) requestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, r, http.StatusBadRequest, "Invalid password reset form.")
+		return
+	}
 	email := strings.ToLower(strings.TrimSpace(r.FormValue("email")))
-	key := "password-reset\x00" + s.clientIP(r) + "\x00" + email
-	if !s.login.allow(key) {
-		time.Sleep(250 * time.Millisecond)
+	if !s.takeResetAttempt(s.clientIP(r), email) {
 		s.render(w, r, http.StatusTooManyRequests, ui.PasswordResetPage(ui.PageData{Title: "Reset password", Error: "Too many reset requests. Try again later."}))
 		return
 	}
-	s.login.fail(key)
-	if user, err := s.repository.FindUserByEmail(r.Context(), email); err == nil {
-		if token, tokenErr := auth.NewToken(); tokenErr == nil {
-			if createErr := s.repository.CreatePasswordResetForUser(r.Context(), user.ID, auth.TokenHash(token), time.Now().UTC().Add(30*time.Minute)); createErr == nil {
-				resetURL := strings.TrimRight(s.config.BaseURL.String(), "/") + "/password-reset/confirm?token=" + url.QueryEscape(token)
-				if sendErr := s.sendAccountEmail(r.Context(), user.Email, "Reset your Litebox password", fmt.Sprintf("A password reset was requested for your Litebox account.\n\nOpen this link within 30 minutes:\n%s\n\nIf you did not request this, you can ignore this message.", resetURL)); sendErr != nil {
-					s.logger.Error("password reset email failed", "request_id", requestID(r), "error", sendErr)
-				}
-			}
+	token, tokenErr := auth.NewToken()
+	user, userErr := s.repository.FindUserByEmail(r.Context(), email)
+	if tokenErr != nil {
+		s.logger.Error("generate password reset token", "request_id", requestID(r), "error", tokenErr)
+	} else if userErr == nil {
+		resetURL := strings.TrimRight(s.currentConfig().BaseURL.String(), "/") + "/password-reset/confirm?token=" + url.QueryEscape(token)
+		queued := s.enqueueAccountEmail(accountEmail{
+			recipient:   user.Email,
+			subject:     "Reset your Litebox password",
+			body:        fmt.Sprintf("A password reset was requested for your Litebox account.\n\nOpen this link within 30 minutes:\n%s\n\nIf you did not request this, you can ignore this message.", resetURL),
+			resetUserID: user.ID, resetTokenHash: auth.TokenHash(token), resetTTL: 30 * time.Minute,
+		})
+		if !queued {
+			s.logger.Error("password reset delivery queue is full", "request_id", requestID(r))
+		}
+	} else if !errors.Is(userErr, repository.ErrNotFound) {
+		s.logger.Error("look up password reset account", "request_id", requestID(r), "error", userErr)
+	}
+	// Keep the public response uniform even though known accounts require a
+	// little more local work. Provider I/O is handled by the bounded worker.
+	if remaining := 100*time.Millisecond - time.Since(started); remaining > 0 {
+		timer := time.NewTimer(remaining)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-r.Context().Done():
+			return
 		}
 	}
 	http.Redirect(w, r, "/password-reset?notice=reset-requested", http.StatusSeeOther)
@@ -318,14 +389,25 @@ func (s *Server) passwordResetConfirmPage(w http.ResponseWriter, r *http.Request
 
 func (s *Server) consumePasswordReset(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-	_ = r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		s.renderError(w, r, http.StatusBadRequest, "Invalid password reset form.")
+		return
+	}
 	token := strings.TrimSpace(r.FormValue("token"))
+	if _, err := s.repository.UserForPasswordReset(r.Context(), auth.TokenHash(token)); err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			s.renderError(w, r, http.StatusNotFound, "This password reset link is invalid or has expired.")
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
 	password := r.FormValue("password")
 	if password != r.FormValue("password_confirmation") {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.PasswordResetConfirmPage(ui.PageData{Title: "Choose a new password", Token: token, Error: "The passwords do not match."}))
 		return
 	}
-	hash, err := auth.HashPassword(password)
+	hash, err := s.hashPassword(r.Context(), password)
 	if err != nil {
 		s.render(w, r, http.StatusUnprocessableEntity, ui.PasswordResetConfirmPage(ui.PageData{Title: "Choose a new password", Token: token, Error: err.Error()}))
 		return
@@ -352,7 +434,7 @@ func (s *Server) sendAccountEmail(ctx context.Context, recipient, subject, body 
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if cookie, err := r.Cookie(s.config.CookieName); err == nil {
+	if cookie, err := r.Cookie(s.currentConfig().CookieName); err == nil {
 		_ = s.repository.DeleteSession(r.Context(), auth.TokenHash(cookie.Value))
 	}
 	s.clearCookies(w)
@@ -687,7 +769,7 @@ func (s *Server) parseDraftForm(w http.ResponseWriter, r *http.Request, id strin
 	}
 	subject := cleanFormHeader(r.FormValue("subject"))
 	body := r.FormValue("body")
-	if int64(len(body)) > s.config.MaxMessageTextBytes {
+	if int64(len(body)) > s.currentConfig().MaxMessageTextBytes {
 		s.renderDraftError(w, r, id, "The message body is too large.")
 		return model.Draft{}, false
 	}
@@ -709,7 +791,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		s.repositoryError(w, r, err)
 		return
 	}
-	if len(draft.Attachments) >= s.config.MaxAttachmentCount {
+	if len(draft.Attachments) >= s.currentConfig().MaxAttachmentCount {
 		s.renderError(w, r, http.StatusUnprocessableEntity, "This draft has too many attachments.")
 		return
 	}
@@ -723,7 +805,7 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 	for _, attachment := range draft.Attachments {
 		total += attachment.SizeBytes
 	}
-	if header.Size < 0 || total+header.Size > s.config.MaxOutboundAttachmentBytes {
+	if header.Size < 0 || total+header.Size > s.currentConfig().MaxOutboundAttachmentBytes {
 		s.renderError(w, r, http.StatusRequestEntityTooLarge, "Attachments exceed the configured 25 MiB budget.")
 		return
 	}
@@ -738,8 +820,13 @@ func (s *Server) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 	attachment := model.Attachment{ID: attachmentID, DraftID: draftID, Filename: service.SafeFilename(header.Filename),
 		SafeFilename: service.SafeFilename(header.Filename), ContentType: contentType, StorageBackend: "filesystem",
 		StorageKey: key, SizeBytes: info.Size, SHA256: info.SHA256, StorageStatus: "ready", CreatedAt: time.Now().UTC()}
-	if err := s.repository.AddDraftAttachment(r.Context(), attachment); err != nil {
+	cfg := s.currentConfig()
+	if err := s.repository.AddDraftAttachmentWithinLimits(r.Context(), attachment, cfg.MaxAttachmentCount, cfg.MaxOutboundAttachmentBytes); err != nil {
 		_ = s.store.Delete(r.Context(), key)
+		if errors.Is(err, repository.ErrAttachmentLimit) {
+			s.renderError(w, r, http.StatusRequestEntityTooLarge, "Attachments exceed the configured budget.")
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
@@ -787,7 +874,7 @@ func (s *Server) attachment(w http.ResponseWriter, r *http.Request, inline bool)
 	w.Header().Set("Content-Type", attachment.ContentType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": attachment.SafeFilename}))
 	w.Header().Set("Content-Length", fmt.Sprint(info.Size))
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Cache-Control", "private, no-store")
 	if attachment.SHA256 != "" {
 		w.Header().Set("ETag", `"sha256-`+attachment.SHA256+`"`)
 	}
@@ -950,7 +1037,7 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system operations.")
 			return
 		}
-		stats, err := s.repository.SystemStats(r.Context(), s.config.DBPath)
+		stats, err := s.repository.SystemStats(r.Context(), s.currentConfig().DBPath)
 		if err != nil {
 			s.internalError(w, r, err)
 			return
@@ -970,7 +1057,8 @@ func (s *Server) admin(w http.ResponseWriter, r *http.Request) {
 			health = "Unavailable"
 		}
 		data.Title, data.SettingsSection = "System", "system"
-		data.RuntimeBaseURL, data.RuntimeSessionTTL, data.RuntimeLogLevel = s.config.BaseURL.String(), int(s.config.SessionTTL/time.Hour), s.config.LogLevel
+		cfg := s.currentConfig()
+		data.RuntimeBaseURL, data.RuntimeSessionTTL, data.RuntimeLogLevel = cfg.BaseURL.String(), int(cfg.SessionTTL/time.Hour), cfg.LogLevel
 		data.Stats, data.Jobs, data.Webhooks, data.StorageHealth = stats, jobList, webhooks, health
 	}
 	s.render(w, r, http.StatusOK, ui.MailboxPage(data))
@@ -1041,8 +1129,11 @@ func (s *Server) updateSystemSettings(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusForbidden, "Primary mailbox administrator access is required for system settings.")
 		return
 	}
-	baseURL, err := url.Parse(strings.TrimSpace(r.FormValue("base_url")))
-	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" || (s.config.Environment == "production" && baseURL.Scheme != "https") {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	current := s.currentConfig()
+	baseURL, err := config.ParseBaseURL(r.FormValue("base_url"), current.Environment == "production")
+	if err != nil {
 		s.renderError(w, r, http.StatusUnprocessableEntity, "Enter a valid public URL (HTTPS is required in production).")
 		return
 	}
@@ -1053,29 +1144,35 @@ func (s *Server) updateSystemSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	logLevel := strings.ToLower(strings.TrimSpace(r.FormValue("log_level")))
 	if logLevel != "debug" && logLevel != "info" && logLevel != "warn" && logLevel != "error" {
-		logLevel = "info"
+		s.renderError(w, r, http.StatusUnprocessableEntity, "Choose a valid log level.")
+		return
 	}
 	apiKey, secret, domain := strings.TrimSpace(r.FormValue("resend_api_key")), strings.TrimSpace(r.FormValue("resend_webhook_secret")), strings.TrimSpace(r.FormValue("resend_domain_id"))
 	if apiKey == "" {
-		apiKey = s.config.ResendAPIKey
+		apiKey = current.ResendAPIKey
 	}
 	if secret == "" {
-		secret = s.config.ResendWebhookSecret
+		secret = current.ResendWebhookSecret
 	}
 	if domain == "" {
-		domain = s.config.ResendDomainID
+		domain = current.ResendDomainID
+	}
+	next := current
+	next.BaseURL, next.SessionTTL, next.LogLevel = baseURL, time.Duration(ttl)*time.Hour, logLevel
+	next.ResendAPIKey, next.ResendWebhookSecret, next.ResendDomainID = apiKey, secret, domain
+	next.AllowUnconfigured = false
+	if err := next.Validate(); err != nil {
+		s.renderError(w, r, http.StatusUnprocessableEntity, "The system settings are invalid: "+err.Error())
+		return
 	}
 	value := settings.Values{Configured: true, BaseURL: baseURL.String(), SessionTTLHours: ttl, LogLevel: logLevel,
-		MaxWebhookBodyBytes: s.config.MaxWebhookBodyBytes, MaxMessageTextBytes: s.config.MaxMessageTextBytes, MaxUploadRequestBytes: s.config.MaxUploadRequestBytes,
-		MaxOutboundAttachmentBytes: s.config.MaxOutboundAttachmentBytes, MaxAttachmentCount: s.config.MaxAttachmentCount,
+		MaxWebhookBodyBytes: current.MaxWebhookBodyBytes, MaxMessageTextBytes: current.MaxMessageTextBytes, MaxUploadRequestBytes: current.MaxUploadRequestBytes,
+		MaxOutboundAttachmentBytes: current.MaxOutboundAttachmentBytes, MaxAttachmentCount: current.MaxAttachmentCount,
 		ResendAPIKey: apiKey, ResendWebhookSecret: secret, ResendDomainID: domain}
 	if err := s.settings.Save(r.Context(), value); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	next := s.config
-	next.BaseURL, next.SessionTTL, next.LogLevel = baseURL, time.Duration(ttl)*time.Hour, logLevel
-	next.ResendAPIKey, next.ResendWebhookSecret, next.ResendDomainID = apiKey, secret, domain
 	if s.applyConfig != nil {
 		s.applyConfig(next)
 	}
@@ -1137,7 +1234,7 @@ func (s *Server) updateAliasColor(w http.ResponseWriter, r *http.Request) {
 		s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	http.Redirect(w, r, "/settings/mailboxes", http.StatusSeeOther)
+	http.Redirect(w, r, requestMailboxURL(r, "/settings/mailboxes", state.Mailbox.ID), http.StatusSeeOther)
 }
 
 func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
@@ -1163,7 +1260,7 @@ func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 			s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		inviteURL := strings.TrimRight(s.config.BaseURL.String(), "/") + "/invite?token=" + url.QueryEscape(token)
+		inviteURL := strings.TrimRight(s.currentConfig().BaseURL.String(), "/") + "/invite?token=" + url.QueryEscape(token)
 		body := fmt.Sprintf("You have been invited to %s on Litebox.\n\nAccept the invitation within 72 hours:\n%s\n\nYour mailbox role: %s", invitation.MailboxName, inviteURL, role)
 		if err := s.sendAccountEmail(r.Context(), invitation.Email, "You have been invited to Litebox", body); err != nil {
 			s.logger.Error("invitation email failed", "request_id", requestID(r), "error", err)
@@ -1173,7 +1270,7 @@ func (s *Server) addMember(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, requestMailboxURL(r, "/settings/people?notice=invitation-sent", state.Mailbox.ID), http.StatusSeeOther)
 		return
 	} else {
-		hash, err := auth.HashPassword(password)
+		hash, err := s.hashPassword(r.Context(), password)
 		if err != nil {
 			s.renderError(w, r, http.StatusUnprocessableEntity, err.Error())
 			return
@@ -1241,7 +1338,7 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, s.config.MaxWebhookBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, s.currentConfig().MaxWebhookBodyBytes)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -1330,6 +1427,8 @@ func (s *Server) sender(r *http.Request) (model.Address, error) {
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, component templ.Component) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(status)
 	if err := component.Render(r.Context(), w); err != nil {
 		s.logger.Error("failed to render page", "request_id", requestID(r), "error", err)

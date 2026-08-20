@@ -26,9 +26,12 @@ help:
 	@echo "  vuln           scan dependencies for known vulnerabilities"
 	@echo "  container-smoke build and health-check the local container"
 	@echo "  compose-up     build source and start the local Compose stack"
+	@echo "  compose-down   stop and remove the local Compose stack"
 	@echo "  compose-pull   pull the published multi-platform image"
+	@echo "  compose-config validate published and source-build Compose configurations"
 	@echo "  dev-image      build the reproducible development image"
 	@echo "  check          run release-grade local verification"
+	@echo "  clean          remove Go build artifacts and generated build directories"
 
 setup: bootstrap generate compose-config
 	$(GO) test ./internal/config ./internal/ui

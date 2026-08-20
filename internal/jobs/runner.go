@@ -74,28 +74,96 @@ func (r *Runner) worker(ctx context.Context, owner string) {
 			timer.Reset(r.poll)
 			continue
 		}
-		handler, ok := r.handlers[job.Kind]
-		if !ok {
-			err = Permanent(fmt.Errorf("unsupported job kind"))
-		} else {
-			err = handler(ctx, job)
-		}
-		if err == nil {
-			if completeErr := r.repository.CompleteJob(ctx, job.ID); completeErr != nil {
-				r.logger.Error("failed to complete job", "job_id", job.ID, "kind", job.Kind, "error", completeErr)
+		err, leaseLost := r.runJob(ctx, owner, job)
+		if leaseLost {
+			r.logger.Warn("job lease lost; stale result discarded", "job_id", job.ID, "kind", job.Kind, "owner", owner)
+			if ctx.Err() != nil {
+				return
 			}
 			timer.Reset(0)
 			continue
 		}
+		if err == nil {
+			finalizeContext, cancel := jobMutationContext(ctx)
+			completeErr := r.repository.CompleteJob(finalizeContext, job.ID, owner)
+			cancel()
+			if errors.Is(completeErr, repository.ErrLeaseLost) {
+				r.logger.Warn("job completion skipped after lease loss", "job_id", job.ID, "kind", job.Kind, "owner", owner)
+			} else if completeErr != nil {
+				r.logger.Error("failed to complete job", "job_id", job.ID, "kind", job.Kind, "error", completeErr)
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			timer.Reset(0)
+			continue
+		}
+		if ctx.Err() != nil {
+			r.logger.Info("job interrupted by shutdown; lease left for recovery", "job_id", job.ID, "kind", job.Kind, "owner", owner)
+			return
+		}
 		var permanent *PermanentError
 		isPermanent := errors.As(err, &permanent)
 		retryAt := time.Now().Add(Backoff(job.AttemptCount))
-		if failErr := r.repository.FailJob(ctx, job.ID, safeError(err), retryAt, isPermanent); failErr != nil {
+		finalizeContext, cancel := jobMutationContext(ctx)
+		failErr := r.repository.FailJob(finalizeContext, job.ID, owner, safeError(err), retryAt, isPermanent)
+		cancel()
+		if errors.Is(failErr, repository.ErrLeaseLost) {
+			r.logger.Warn("job failure discarded after lease loss", "job_id", job.ID, "kind", job.Kind, "owner", owner)
+		} else if failErr != nil {
 			r.logger.Error("failed to record job error", "job_id", job.ID, "kind", job.Kind, "error", failErr)
 		}
 		r.logger.Warn("job failed", "job_id", job.ID, "kind", job.Kind, "attempt", job.AttemptCount, "permanent", isPermanent, "error", err)
 		timer.Reset(0)
 	}
+}
+
+func (r *Runner) runJob(ctx context.Context, owner string, job model.Job) (error, bool) {
+	handlerContext, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
+
+	result := make(chan error, 1)
+	go func() {
+		handler, ok := r.handlers[job.Kind]
+		if !ok {
+			result <- Permanent(fmt.Errorf("unsupported job kind"))
+			return
+		}
+		result <- handler(handlerContext, job)
+	}()
+
+	ticker := time.NewTicker(leaseHeartbeatInterval(r.lease))
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			return err, false
+		case <-ctx.Done():
+			cancelHandler()
+			return <-result, false
+		case <-ticker.C:
+			err := r.repository.RenewJobLease(ctx, job.ID, owner, r.lease)
+			if errors.Is(err, repository.ErrLeaseLost) {
+				cancelHandler()
+				return <-result, true
+			}
+			if err != nil {
+				r.logger.Error("failed to renew job lease", "job_id", job.ID, "kind", job.Kind, "owner", owner, "error", err)
+			}
+		}
+	}
+}
+
+func leaseHeartbeatInterval(lease time.Duration) time.Duration {
+	interval := lease / 3
+	if interval < time.Millisecond {
+		return time.Millisecond
+	}
+	return interval
+}
+
+func jobMutationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
 // Backoff returns exponential retry delay with bounded jitter.

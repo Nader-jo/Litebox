@@ -43,7 +43,8 @@ func NewFileStore(root, tmpRoot string) (*FileStore, error) {
 	return store, nil
 }
 
-// Put streams a blob into a same-filesystem temporary file before atomic rename.
+// Put streams a blob into a same-filesystem temporary file before publishing it
+// without replacing an existing immutable key.
 func (s *FileStore) Put(ctx context.Context, key string, reader io.Reader, expectedSize int64, contentType string) (BlobInfo, error) {
 	finalPath, err := s.path(key)
 	if err != nil {
@@ -78,24 +79,78 @@ func (s *FileStore) Put(ctx context.Context, key string, reader io.Reader, expec
 	if err := tmp.Close(); err != nil {
 		return BlobInfo{}, fmt.Errorf("close blob: %w", err)
 	}
-	if existing, err := os.Stat(finalPath); err == nil {
+	incomingHash := fmt.Sprintf("%x", hash.Sum(nil))
+	created, err := publishNoReplace(ctx, tmpName, finalPath, os.Link)
+	if err != nil {
+		return BlobInfo{}, fmt.Errorf("commit blob without replacement: %w", err)
+	}
+	if !created {
+		existing, statErr := os.Stat(finalPath)
+		if statErr != nil {
+			return BlobInfo{}, fmt.Errorf("inspect concurrently committed blob: %w", statErr)
+		}
 		existingHash, hashErr := checksumFile(finalPath)
-		incomingHash := fmt.Sprintf("%x", hash.Sum(nil))
 		if hashErr != nil || existing.Size() != written || existingHash != incomingHash {
 			return BlobInfo{}, fmt.Errorf("blob key collision: %s", key)
 		}
 		return BlobInfo{Key: key, Size: existing.Size(), SHA256: existingHash, ContentType: contentType, ModTime: existing.ModTime()}, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return BlobInfo{}, fmt.Errorf("inspect blob target: %w", err)
-	}
-	if err := os.Rename(tmpName, finalPath); err != nil {
-		return BlobInfo{}, fmt.Errorf("commit blob: %w", err)
 	}
 	info, err := os.Stat(finalPath)
 	if err != nil {
 		return BlobInfo{}, fmt.Errorf("stat committed blob: %w", err)
 	}
-	return BlobInfo{Key: key, Size: written, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), ContentType: contentType, ModTime: info.ModTime()}, nil
+	return BlobInfo{Key: key, Size: written, SHA256: incomingHash, ContentType: contentType, ModTime: info.ModTime()}, nil
+}
+
+func publishNoReplace(ctx context.Context, source, destination string, link func(string, string) error) (bool, error) {
+	if err := link(source, destination); err == nil {
+		return true, nil
+	} else if _, statErr := os.Stat(destination); statErr == nil {
+		_ = os.Remove(destination + ".litebox-lock")
+		return false, nil
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return false, statErr
+	}
+	lockPath := destination + ".litebox-lock"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			if closeErr := lock.Close(); closeErr != nil {
+				_ = os.Remove(lockPath)
+				return false, closeErr
+			}
+			defer func() { _ = os.Remove(lockPath) }()
+			if _, statErr := os.Stat(destination); statErr == nil {
+				return false, nil
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				return false, statErr
+			}
+			if err := os.Rename(source, destination); err != nil {
+				return false, err
+			}
+			return true, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return false, err
+		}
+		if _, statErr := os.Stat(destination); statErr == nil {
+			_ = os.Remove(lockPath)
+			return false, nil
+		}
+		if time.Now().After(deadline) {
+			return false, fmt.Errorf("timed out waiting for immutable publish lock %s; verify no writer is active before removing it", lockPath)
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func checksumFile(path string) (string, error) {
@@ -157,16 +212,27 @@ func (s *FileStore) Exists(_ context.Context, key string) (bool, error) {
 	return false, err
 }
 
-// Health verifies that the storage root can durably create and remove a file.
+// Health verifies that both configured storage directories can create and
+// remove private files. Blob commits themselves stage beside their final path
+// so the final rename remains on one filesystem.
 func (s *FileStore) Health(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
-	file, err := os.CreateTemp(s.root, ".health-*")
+	for _, directory := range []string{s.root, s.tmpRoot} {
+		if err := probeWritable(directory); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func probeWritable(directory string) error {
+	file, err := os.CreateTemp(directory, ".health-*")
 	if err != nil {
-		return fmt.Errorf("blob storage is not writable: %w", err)
+		return fmt.Errorf("blob storage directory %q is not writable: %w", directory, err)
 	}
 	name := file.Name()
 	if err := file.Close(); err != nil {

@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +25,9 @@ func TestResendAdapterReceivingSendingAndVerification(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/emails/receiving/r1":
+			if r.URL.Query().Get("html_format") != "cid" {
+				t.Errorf("received email did not request CID HTML: %q", r.URL.RawQuery)
+			}
 			writeJSON(w, map[string]any{"id": "r1", "object": "email", "to": []string{"hello@example.com"},
 				"from": "alice@example.com", "created_at": "2026-08-10T10:00:00Z", "subject": "Hello",
 				"html": "<p>Hello</p>", "text": "Hello", "message_id": "<r1@example.com>",
@@ -85,6 +90,45 @@ func TestResendAdapterReceivingSendingAndVerification(t *testing.T) {
 	}
 	if err := adapter.VerifyWebhook(payload, WebhookHeaders{ID: id, Timestamp: fmt.Sprint(timestamp), Signature: "v1,bad"}); err == nil {
 		t.Fatal("expected invalid signature")
+	}
+}
+
+func TestDownloadRejectsUnsafeRedirect(t *testing.T) {
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://example.com/insecure", http.StatusFound)
+	}))
+	defer redirect.Close()
+	baseURL, _ := url.Parse(redirect.URL + "/")
+	adapter := NewResendForTest("re_test", "whsec_test", redirect.Client(), baseURL)
+	if _, _, err := adapter.Download(context.Background(), redirect.URL); err == nil {
+		t.Fatal("expected unsafe redirect to be rejected")
+	}
+}
+
+func TestGuardedDialRejectsHostnameResolvingToPrivateAddress(t *testing.T) {
+	dialed := false
+	dial := guardedDialContext(func(context.Context, string, string) (net.Conn, error) {
+		dialed = true
+		return nil, errors.New("unexpected dial")
+	}, false, func(context.Context, string, string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}, nil
+	})
+	if _, err := dial(context.Background(), "tcp", "provider.example:443"); err == nil {
+		t.Fatal("expected private DNS results to be rejected")
+	}
+	if dialed {
+		t.Fatal("restricted DNS result reached the network dialer")
+	}
+}
+
+func TestAllowedDialIPRejectsSpecialPurposeNetworks(t *testing.T) {
+	for _, value := range []string{"100.64.0.1", "198.18.0.1", "192.0.2.1", "203.0.113.1", "2001:db8::1"} {
+		if allowedDialIP("provider.example", net.ParseIP(value), false) {
+			t.Errorf("allowed special-purpose address %s", value)
+		}
+	}
+	if !allowedDialIP("provider.example", net.ParseIP("8.8.8.8"), false) {
+		t.Fatal("rejected a public unicast address")
 	}
 }
 

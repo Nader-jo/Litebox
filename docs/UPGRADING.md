@@ -21,9 +21,10 @@ docker compose ps
 docker compose exec mailbox /app/litebox version
 ```
 
-Copy `.env`, `compose.yaml`, `Caddyfile`, and `/data/.litebox/master.key` into
-your secret/configuration backup. Do not publish them; the master key protects
-the encrypted provider credentials now stored in SQLite.
+Copy `.env`, `compose.yaml`, and `Caddyfile` into a protected configuration
+backup. The `litebox backup` created in the next step includes and verifies
+`/data/.litebox/master.key`; an additional secret-manager copy is useful defense
+in depth. Do not publish any of these files.
 
 ## 2. Create a quiesced, independent backup
 
@@ -45,7 +46,7 @@ location and run `doctor --deep` before continuing.
 
 ## 3. Upgrade the pinned image
 
-Releases publish only the signed multi-platform GHCR image. Update the image
+Releases publish only the provenance-attested multi-platform GHCR image. Update the image
 tag in the existing `.env`, pull it, and restart Compose:
 
 ```bash
@@ -85,11 +86,12 @@ period appropriate to the mailbox's importance.
 
 Version 0.4.0 imports legacy provider environment values once and then treats
 SQLite as the source of truth. Version 0.4.1 additionally requires
-`LITEBOX_DOMAIN` in the Compose environment; keep it aligned with the public
-hostname and Caddy/DNS configuration. Keep the master-key file with every backup. A
-database restored without its matching key can still be inspected for mailbox
-metadata, but encrypted provider credentials must be entered again under
-**Settings → System** before sending or webhook verification resumes.
+`LITEBOX_DOMAIN` in the Compose environment; keep it aligned with the saved
+public URL and Caddy/DNS configuration. The supported backup contains the
+master key, and restore reinstalls it with the database and blobs. A database
+without its matching key is not a recoverable Litebox installation: settings
+decryption fails before the UI starts, so credentials cannot simply be entered
+again under **Settings → System**.
 
 Never deploy `latest` in production. Verify the target release, image
 attestation, and platform manifest before changing the pin.

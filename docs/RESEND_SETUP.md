@@ -4,7 +4,7 @@ Provider UI and quotas change. Treat the current Resend dashboard and official d
 
 ## Domain choice
 
-Receiving for `hello@example.com` generally makes Resend responsible for inbound mail at the configured receiving domain. Any local part may reach the webhook. Litebox accepts only addresses registered in `mailbox_addresses` and discards unknown local parts before attachment download. `MAILBOX_ALLOWED_RECIPIENTS` idempotently seeds aliases for the primary mailbox; owners can manage additional aliases and independent mailboxes in the UI.
+Receiving for `hello@example.com` generally makes Resend responsible for inbound mail at the configured receiving domain. Any local part may reach the webhook. Litebox accepts only addresses registered in `mailbox_addresses` and discards unknown local parts before attachment download. `MAILBOX_ALLOWED_RECIPIENTS` seeds aliases only when the primary mailbox is first created; owners manage every later alias and independent mailbox in the UI.
 
 > **MX conflict warning:** If another provider already handles mail for the same domain, changing its MX records can break that service. Consider a dedicated subdomain or plan the migration deliberately.
 
@@ -63,15 +63,28 @@ before JSON parsing.
 - webhook delivery is at least once and can be out of order;
 - `email.received` contains metadata, not complete body bytes;
 - the Receiving API returns normalized content and a temporary raw-email URL;
+- Litebox requests `html_format=cid` explicitly because the provider default may
+  encode inline images as `data:` URLs, which the sanitizer intentionally rejects;
 - attachment download URLs expire and are refreshed on retry;
 - outbound attachment size includes encoding overhead;
 - idempotency keys have a finite provider lifetime.
 
-Litebox therefore persists the verified event and job before returning 200, retrieves bytes asynchronously, copies all durable content locally, caps raw outbound attachments at 25 MiB by default, and maintains its own duplicate-send guard.
+Litebox therefore persists the verified event and job before returning 200 and
+retrieves bytes asynchronously. Every production download and redirect requires
+HTTPS; hostname resolution occurs inside a guarded dialer that refuses local,
+private, carrier-grade NAT, link-local, benchmark, documentation, and reserved
+addresses. Raw inbound archives use the upload-size cap. Inbound and outbound
+attachments share the configured 25 MiB aggregate default per message, and the
+attachment-count limit applies to both directions. Oversized inbound bytes
+degrade archival metadata without hiding the readable message. Litebox also
+maintains its own duplicate-send guard.
 
 The primary mailbox is also used to deliver account invitations, password-reset
-links, and optional metadata-only summaries. Verify outbound sending before
-depending on those features.
+links, and optional metadata-only summaries. Password-reset requests return a
+generic response without waiting for Resend and hand delivery to a bounded,
+process-local queue. A provider outage, full queue, or shutdown can lose that
+notification; request another link after delivery is restored. Verify outbound
+sending before depending on those features.
 
 Official references:
 
@@ -85,4 +98,9 @@ Official references:
 
 ## Acceptance test
 
-Before production use, send inbound messages from at least Gmail and Outlook with plain text, HTML, Unicode, multiple attachments, an inline image, and a long subject. Test Reply, Reply all, CC/BCC, attachment sending, the provider's bounce address, duplicate webhook replay, and a temporary API outage.
+Before production use, send inbound messages from at least Gmail and Outlook
+with plain text, HTML, Unicode, multiple attachments, an inline image, and a long
+subject. Test Reply, Reply all, CC/BCC, attachment sending, an invitation and
+password reset, the provider's bounce address, duplicate webhook replay, and a
+temporary API outage. Confirm that a reset request returns promptly during the
+outage and that requesting a fresh link succeeds after delivery recovers.

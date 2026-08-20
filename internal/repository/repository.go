@@ -14,6 +14,10 @@ import (
 // ErrNotFound is returned when a requested domain record does not exist.
 var ErrNotFound = errors.New("record not found")
 
+// ErrAttachmentLimit reports that a concurrent attachment reservation would
+// exceed the configured count or byte budget.
+var ErrAttachmentLimit = errors.New("attachment limit exceeded")
+
 // Repository is a concurrency-safe collection of SQLite operations.
 type Repository struct{ db *sql.DB }
 

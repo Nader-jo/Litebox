@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -23,11 +24,12 @@ type Resend struct {
 	client        *resend.Client
 	http          *http.Client
 	webhookSecret string
+	allowLocal    bool
 }
 
 // NewResend creates a long-lived Resend adapter.
 func NewResend(apiKey, webhookSecret string) *Resend {
-	httpClient := &http.Client{Timeout: time.Minute}
+	httpClient := guardedHTTPClient(&http.Client{Timeout: time.Minute}, false)
 	return &Resend{client: resend.NewCustomClient(httpClient, apiKey), http: httpClient, webhookSecret: webhookSecret}
 }
 
@@ -41,9 +43,10 @@ func (r *Resend) UpdateCredentials(apiKey, webhookSecret string) {
 
 // NewResendForTest creates an adapter with an injectable API endpoint and HTTP client.
 func NewResendForTest(apiKey, webhookSecret string, httpClient *http.Client, baseURL *url.URL) *Resend {
+	httpClient = guardedHTTPClient(httpClient, true)
 	client := resend.NewCustomClient(httpClient, apiKey)
 	client.BaseURL = baseURL
-	return &Resend{client: client, http: httpClient, webhookSecret: webhookSecret}
+	return &Resend{client: client, http: httpClient, webhookSecret: webhookSecret, allowLocal: true}
 }
 
 // VerifyWebhook delegates raw-body signature verification to the official SDK.
@@ -66,7 +69,8 @@ func (r *Resend) GetReceived(ctx context.Context, id string) (ReceivedEmail, err
 	r.mu.RLock()
 	client := r.client
 	r.mu.RUnlock()
-	email, err := client.Emails.Receiving.GetWithContext(ctx, id)
+	htmlFormat := "cid"
+	email, err := client.Emails.Receiving.GetWithOptions(ctx, id, &resend.GetReceivedEmailParams{HtmlFormat: &htmlFormat})
 	if err != nil {
 		return ReceivedEmail{}, classify(err)
 	}
@@ -100,7 +104,7 @@ func (r *Resend) GetReceivedAttachment(ctx context.Context, emailID, attachmentI
 // Download opens a temporary provider URL for streaming into private storage.
 func (r *Resend) Download(ctx context.Context, rawURL string) (io.ReadCloser, int64, error) {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !isLocalTestURL(parsed)) {
+	if err != nil || !validDownloadURL(parsed, r.allowLocal) {
 		return nil, 0, &Error{Kind: "invalid_response", Message: "provider returned an invalid download URL", Cause: err}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
@@ -180,7 +184,122 @@ func formatAddressList(addresses []model.Address) []string {
 	return result
 }
 
-func isLocalTestURL(value *url.URL) bool {
+func guardedHTTPClient(base *http.Client, allowLocal bool) *http.Client {
+	clone := *base
+	var transport *http.Transport
+	if configured, ok := clone.Transport.(*http.Transport); ok {
+		transport = configured.Clone()
+	} else {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	transport.Proxy = nil
+	transport.DialContext = guardedDialContext(transport.DialContext, allowLocal, net.DefaultResolver.LookupIP)
+	transport.DialTLSContext = nil
+	clone.Transport = transport
+	previous := clone.CheckRedirect
+	clone.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if !validDownloadURL(request.URL, allowLocal) {
+			return errors.New("provider redirect target is not allowed")
+		}
+		if previous != nil {
+			return previous(request, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &clone
+}
+
+type ipLookup func(context.Context, string, string) ([]net.IP, error)
+
+func guardedDialContext(base func(context.Context, string, string) (net.Conn, error), allowLocal bool, lookup ipLookup) func(context.Context, string, string) (net.Conn, error) {
+	if base == nil {
+		dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+		base = dialer.DialContext
+	}
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("invalid provider dial target: %w", err)
+		}
+		var addresses []net.IP
+		if literal := net.ParseIP(host); literal != nil {
+			addresses = []net.IP{literal}
+		} else {
+			addresses, err = lookup(ctx, "ip", host)
+			if err != nil {
+				return nil, fmt.Errorf("resolve provider dial target: %w", err)
+			}
+		}
+		var lastErr error
+		for _, candidate := range addresses {
+			if !allowedDialIP(host, candidate, allowLocal) {
+				continue
+			}
+			connection, dialErr := base(ctx, network, net.JoinHostPort(candidate.String(), port))
+			if dialErr == nil {
+				return connection, nil
+			}
+			lastErr = dialErr
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, errors.New("provider dial target resolved only to restricted addresses")
+	}
+}
+
+func allowedDialIP(host string, address net.IP, allowLocal bool) bool {
+	literalHost := net.ParseIP(host)
+	if allowLocal && (strings.EqualFold(host, "localhost") || literalHost != nil && literalHost.IsLoopback()) && address.IsLoopback() {
+		return true
+	}
+	parsed, ok := netip.AddrFromSlice(address)
+	if !ok {
+		return false
+	}
+	parsed = parsed.Unmap()
+	for _, prefix := range restrictedDialPrefixes {
+		if prefix.Contains(parsed) {
+			return false
+		}
+	}
+	return address.IsGlobalUnicast() && !address.IsLoopback() && !address.IsPrivate() &&
+		!address.IsLinkLocalUnicast() && !address.IsLinkLocalMulticast() && !address.IsUnspecified()
+}
+
+var restrictedDialPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+}
+
+func validDownloadURL(value *url.URL, allowLocal bool) bool {
+	if value == nil || value.Host == "" {
+		return false
+	}
 	host := strings.ToLower(value.Hostname())
-	return value.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1")
+	if allowLocal && value.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1") {
+		return true
+	}
+	if value.Scheme != "https" || host == "localhost" {
+		return false
+	}
+	if address := net.ParseIP(host); address != nil && (address.IsLoopback() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsUnspecified()) {
+		return false
+	}
+	return true
 }

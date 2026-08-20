@@ -60,8 +60,13 @@ Migration `004_multi_mailbox.sql` is automatic and transactional. It:
 - introduces mailbox memberships;
 - changes inbound provider uniqueness from global to per-mailbox while retaining global outbound provider uniqueness.
 
-No environment change is required. Keep `MAILBOX_PRIMARY_ADDRESS` stable. Values in `MAILBOX_ALLOWED_RECIPIENTS` continue to be ensured as primary-mailbox aliases at startup; removing a value from the environment does not delete a database-managed alias.
+No environment change is required. Keep `MAILBOX_PRIMARY_ADDRESS` stable.
+`MAILBOX_ALLOWED_RECIPIENTS` is a one-time seed used only when the primary
+mailbox is first created. Adding or removing an environment value after that
+point does not change database-managed aliases.
 
 Back up `/data` before upgrading and run `litebox doctor --deep` after the first startup on the new version.
 
-After migration, alias colors and runtime settings are stored in SQLite. The environment aliases are used only for the one-time bootstrap import; manage future aliases in **Settings → Mailboxes**.
+After migration, alias colors and runtime settings are stored in SQLite. Manage
+future aliases in **Settings → Mailboxes**. See
+[Configuration](CONFIGURATION.md) for the complete environment/SQLite lifecycle.

@@ -24,9 +24,10 @@ func SanitizeHTML(input string, resolveCID CIDResolver) (sanitized string, remot
 			for i := range node.Attr {
 				if strings.EqualFold(node.Attr[i].Key, "src") {
 					source := strings.TrimSpace(node.Attr[i].Val)
+					lowerSource := strings.ToLower(source)
 					switch {
-					case strings.HasPrefix(strings.ToLower(source), "cid:"):
-						if local := resolveCID(strings.TrimPrefix(source, "cid:")); local != "" {
+					case strings.HasPrefix(lowerSource, "cid:"):
+						if local := resolveCID(source[len("cid:"):]); local != "" {
 							node.Attr[i].Val = local
 						} else {
 							node.Attr[i].Val = ""
@@ -88,5 +89,5 @@ func TextFromHTML(input string) string {
 
 func isRemoteURL(value string) bool {
 	parsed, err := url.Parse(value)
-	return err == nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) && parsed.Host != ""
+	return err == nil && (parsed.Host != "" || parsed.Scheme != "")
 }

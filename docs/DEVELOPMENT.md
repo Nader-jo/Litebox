@@ -4,7 +4,9 @@
 
 - Go 1.26.6 or newer (the patch-level floor includes required standard-library security fixes);
 - Docker Engine and Compose for container verification;
-- GNU Make for convenience targets (all commands can also run directly).
+- GNU Make and POSIX shell utilities (`bash`, `test`, and `rm`) for convenience
+  targets. Windows contributors should use WSL, MSYS2, or Git Bash, or run the
+  underlying Go and Docker commands directly.
 
 No Node.js toolchain is used. HTMX is vendored and the UI is authored in templ plus CSS.
 
@@ -20,7 +22,11 @@ This single command downloads modules, installs every pinned contributor tool,
 generates committed templ output, validates Compose, and runs focused smoke
 tests. Re-running it is safe.
 
-Local development defaults to `.data/` and `hello@example.com`; Resend credentials are optional until a provider workflow is exercised.
+Local development defaults to `.data/` and `hello@example.com`; Resend
+credentials are optional until a provider workflow is exercised. Development
+mode is not a transport mock or safety switch: valid credentials use the real
+provider. Prefer the fake provider in tests and a dedicated Resend test account
+for manual integration work.
 
 ```bash
 APP_ENV=development go run ./cmd/mailbox serve
@@ -38,6 +44,10 @@ make container-smoke
 ```
 
 Production Compose intentionally has no `build` section; it consumes the published multi-platform, shell-free `scratch` image.
+
+Environment variables have different deployment, first-boot, and SQLite-backed
+lifecycles. Read [Configuration](CONFIGURATION.md) before changing defaults or
+adding a setting.
 
 ## Development container
 
@@ -121,7 +131,7 @@ The required high-risk suites cover:
 - search operators and malformed filters;
 - atomic/idempotent blob writes and traversal rejection;
 - migrations and FTS5;
-- webhook/job dedupe and lease recovery;
+- webhook/job dedupe, lease renewal, ownership checks, and recovery;
 - inbound archival and outbound idempotency;
 - first-run/login/CSRF;
 - multi-mailbox routing, membership roles, session revocation, and cross-mailbox isolation;

@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -182,5 +184,51 @@ func TestInboundArchivalAndOutboundIdempotency(t *testing.T) {
 	}
 	if fake.sendCount != 1 {
 		t.Fatalf("logical message was submitted %d times", fake.sendCount)
+	}
+
+	tamperedDraft, err := repo.CreateDraft(ctx, mailboxID, model.Draft{To: []model.Address{{Address: "alice@example.com"}}, Subject: "Tampered", TextBody: "Hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tamperedKey := "drafts/" + tamperedDraft.ID + "/attachment"
+	original := []byte("original")
+	tamperedInfo, err := store.Put(ctx, tamperedKey, bytes.NewReader(original), int64(len(original)), "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddDraftAttachment(ctx, model.Attachment{ID: ids.New(), DraftID: tamperedDraft.ID, Filename: "tampered.txt", SafeFilename: "tampered.txt",
+		ContentType: "text/plain", StorageBackend: "filesystem", StorageKey: tamperedKey, SizeBytes: tamperedInfo.Size,
+		SHA256: tamperedInfo.SHA256, StorageStatus: "ready", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	tamperedMessageID, _, err := repo.QueueDraft(ctx, tamperedDraft.ID, mailboxID, model.Address{Name: "Example", Address: cfg.PrimaryAddress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), filepath.FromSlash(tamperedKey)), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Send(ctx, tamperedMessageID); err == nil {
+		t.Fatal("tampered outbound attachment was sent")
+	}
+	if fake.sendCount != 1 {
+		t.Fatalf("tampered attachment reached provider; send count=%d", fake.sendCount)
+	}
+}
+
+func TestInboundBlobLimitRemovesOversizedObject(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store, err := blobstore.NewFileStore(filepath.Join(root, "objects"), filepath.Join(root, "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailbox := &Mailbox{store: store}
+	key := "raw/2026/08/oversized"
+	if _, err := mailbox.putInboundBlob(ctx, key, bytes.NewReader([]byte("too-large")), -1, "message/rfc822", 4); !errors.Is(err, errInboundBlobLimit) {
+		t.Fatalf("putInboundBlob error = %v, want limit error", err)
+	}
+	if exists, err := store.Exists(ctx, key); err != nil || exists {
+		t.Fatalf("oversized object exists=%v err=%v", exists, err)
 	}
 }

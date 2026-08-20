@@ -19,41 +19,63 @@ Docker automatically selects the matching image from a version tag. Thirty-two-b
 
 ## Image-only installation
 
-Releases contain the signed multi-platform image only. On a fresh VPS, install
-the small deployment templates from the tagged repository and pull the image:
+Releases contain a provenance-attested multi-platform image and no application
+archive. On a fresh VPS, install the small deployment templates and pull the
+image:
 
 ```bash
-VERSION=0.4.1 # replace with the target release
-git clone --depth 1 --branch "v${VERSION}" https://github.com/Nader-jo/Litebox.git /opt/litebox
+VERSION=0.4.1
+# v0.4.1 erratum: use the corrected current templates, not its source tag.
+git clone --depth 1 https://github.com/Nader-jo/Litebox.git /opt/litebox
 cd /opt/litebox
 cp .env.example .env
 # Pin the desired release; Docker selects amd64 or arm64 automatically.
 sed -i "s|^LITEBOX_IMAGE=.*|LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:${VERSION}|" .env
 # Set the public HTTPS hostname used by the app and the optional Caddy profile.
-# Do not include https:// or a path.
+# Do not include https://, a port, or a path.
 sed -i "s|^LITEBOX_DOMAIN=.*|LITEBOX_DOMAIN=mail.example.com|" .env
-docker compose pull
-docker compose up -d
+docker compose --profile proxy pull
+docker compose --profile proxy up -d
 ```
+
+The commands above enable the supplied Caddy service so the first deployment
+has public HTTPS. If the host already has a reverse proxy, omit
+`--profile proxy`, follow [Existing reverse proxy](#existing-reverse-proxy), and
+keep the application port bound to loopback.
+
+> [!NOTE]
+> The immutable `v0.4.1` source tag contains stale deployment defaults that can
+> resolve the application image to `latest`. For `0.4.1`, use the corrected
+> current templates above and explicitly pin `LITEBOX_IMAGE` as shown. Do not
+> move or recreate the public tag. Starting with the next release, replace the
+> clone command with
+> `git clone --depth 1 --branch "v${VERSION}" https://github.com/Nader-jo/Litebox.git /opt/litebox`
+> so deployment templates and the image tag come from the same release.
 
 `LITEBOX_DOMAIN` is required by the production Compose stack. It bootstraps the
 public URL used in the setup link and keeps Caddy on the same hostname. The
 first-run wizard persists the URL in SQLite; later changes should be made in
 **Settings → System** (and in the reverse proxy/DNS configuration). Keep an
 explicit `APP_BASE_URL` only when you intentionally need a non-standard URL.
+See [Configuration](CONFIGURATION.md) for every variable's default, validation,
+and environment-versus-SQLite lifecycle.
 
 The first-run wizard stores the public URL, mailbox identity, and provider
-credentials in SQLite. In production, the container log prints a one-time setup
-URL/token. Credentials are encrypted with `/data/.litebox/master.key`; include
-that file in backups. Do not place secrets in `compose.yaml`, shell history,
-image build arguments, GitHub issues, or logs.
+credentials in SQLite. Each unconfigured production startup rotates and prints
+a fresh setup URL/token; restarting is the supported way to replace a lost
+unexpired link. Setup completion claims the token, mailbox, first owner, and
+encrypted settings in one transaction. Credentials are encrypted with
+`/data/.litebox/master.key`, which a new installation creates before SQLite and
+which `litebox backup` includes automatically. An existing database never
+generates a replacement for a missing or invalid key; startup fails before
+migration. Do not place secrets in `compose.yaml`, shell history, image build
+arguments, GitHub issues, or untrusted logs.
 
 ## Private local demo
 
 Anyone with Docker can explore the UI without a domain or provider credentials:
 
 ```bash
-docker volume create litebox-demo-data
 docker run --rm --name litebox-demo \
   -p 127.0.0.1:8080:8080 \
   -e APP_ENV=development \
@@ -62,8 +84,11 @@ docker run --rm --name litebox-demo \
   ghcr.io/nader-jo/litebox:0.4.1
 ```
 
-The demo binds only to `127.0.0.1:8080`, persists in the
-`litebox-demo-data` volume, and cannot send or receive real email.
+The credential-free demo binds only to `127.0.0.1:8080` and persists in the
+automatically created `litebox-demo-data` volume. It cannot send or receive real
+email as shown. `APP_ENV=development` is not itself a transport kill switch;
+valid Resend credentials enable provider workflows, so use a dedicated test
+account and domain.
 
 Follow the [safe upgrade guide](UPGRADING.md) for backup, image verification,
 and restorative rollback procedures.
@@ -76,7 +101,12 @@ The default Compose mapping is loopback-only:
 127.0.0.1:8080 -> mailbox:8080
 ```
 
-Proxy `https://mail.example.com` to that address. Preserve the original host and configure `TRUSTED_PROXY_CIDRS` only for the proxy network if client IP-based throttling must honor `X-Forwarded-For`. Litebox ignores forwarded IP headers from every other peer.
+Proxy `https://mail.example.com` to that address. Preserve the original host and
+configure `TRUSTED_PROXY_CIDRS` only for every controlled proxy network if
+client IP-based throttling must honor `X-Forwarded-For`. Litebox accepts the
+header only from a trusted direct peer, then walks the chain right-to-left to the
+first untrusted client; a malformed chain or untrusted direct peer falls back to
+`RemoteAddr`.
 
 Start and inspect:
 
@@ -109,7 +139,8 @@ The supplied image and Compose definition:
 - drop all capabilities from Litebox;
 - set `no-new-privileges`;
 - use a read-only image filesystem;
-- provide a bounded `/tmp` tmpfs for multipart parsing;
+- provide a 64 MiB `/tmp` tmpfs for multipart parsing; file parts cross a fixed
+  4 MiB in-memory threshold, spill there, and are removed after each request;
 - persist only the named `/data` volume;
 - include OCI source, license, version, revision, and build-date labels;
 - expose a binary healthcheck.
@@ -166,7 +197,9 @@ Database downgrades are not automatically supported. Restore the pre-upgrade bac
 Monitor:
 
 - `/health/live` for process liveness;
-- `/health/ready` for database and blob-store readiness;
+- `/health/ready` for database and blob-store readiness; its SQLite ping and
+  writable probes of both configured storage directories are cached for five
+  seconds to bound probe I/O, and do not depend on Resend;
 - container restart count;
 - free bytes and inode pressure on the backing volume;
 - dead jobs and failed attachments in `/admin/system`;

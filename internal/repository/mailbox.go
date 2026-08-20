@@ -46,7 +46,8 @@ func (r *Repository) ListThreads(ctx context.Context, mailboxID, folder string, 
 // ListThreadsPage returns one keyset-paginated folder page. The cursor is the
 // final (latest_message_at, id) tuple from the preceding page.
 func (r *Repository) ListThreadsPage(ctx context.Context, mailboxID, folder string, limit int, before time.Time, beforeID string) ([]model.ThreadSummary, bool, error) {
-	condition := "t.is_trashed = 0 AND t.is_archived = 0"
+	condition := `t.is_trashed = 0 AND t.is_archived = 0
+		AND EXISTS (SELECT 1 FROM messages ix WHERE ix.thread_id = t.id AND ix.direction = 'inbound')`
 	switch folder {
 	case "inbox", "":
 	case "sent":
@@ -172,7 +173,7 @@ func (r *Repository) SearchThreadsPage(ctx context.Context, mailboxID string, qu
 	}
 	args = append(args, limit+1)
 	rows, err := r.db.QueryContext(ctx, `SELECT DISTINCT t.id FROM threads t JOIN messages m ON m.thread_id = t.id`+join+
-		` WHERE `+strings.Join(conditions, " AND ")+` ORDER BY t.latest_message_at DESC LIMIT ?`, args...)
+		` WHERE `+strings.Join(conditions, " AND ")+` ORDER BY t.latest_message_at DESC, t.id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, false, err
 	}
@@ -313,24 +314,10 @@ func (r *Repository) ThreadAction(ctx context.Context, mailboxID, id, action str
 
 // DeleteThread permanently removes local rows and schedules idempotent blob deletion.
 func (r *Repository) DeleteThread(ctx context.Context, mailboxID, id string) error {
-	var keys []string
-	rows, err := r.db.QueryContext(ctx, `SELECT storage_key FROM attachments WHERE message_id IN (SELECT id FROM messages WHERE thread_id = ? AND mailbox_id = ?)
-		UNION ALL SELECT raw_storage_key FROM messages WHERE thread_id = ? AND mailbox_id = ? AND raw_storage_key IS NOT NULL`, id, mailboxID, id, mailboxID)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			rows.Close()
-			return err
-		}
-		keys = append(keys, key)
-	}
-	rows.Close()
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
 		var trashed int
-		if err := tx.QueryRowContext(ctx, "SELECT is_trashed FROM threads WHERE id = ? AND mailbox_id = ?", id, mailboxID).Scan(&trashed); err != nil {
+		if err := tx.QueryRowContext(ctx, `UPDATE threads SET updated_at = updated_at
+			WHERE id = ? AND mailbox_id = ? RETURNING is_trashed`, id, mailboxID).Scan(&trashed); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -339,18 +326,52 @@ func (r *Repository) DeleteThread(ctx context.Context, mailboxID, id string) err
 		if trashed == 0 {
 			return fmt.Errorf("thread must be in trash before permanent deletion")
 		}
+		var keys []string
+		rows, err := tx.QueryContext(ctx, `SELECT storage_key FROM attachments
+			WHERE message_id IN (SELECT id FROM messages WHERE thread_id = ? AND mailbox_id = ?)
+			UNION ALL SELECT raw_storage_key FROM messages
+			WHERE thread_id = ? AND mailbox_id = ? AND raw_storage_key IS NOT NULL`, id, mailboxID, id, mailboxID)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				rows.Close()
+				return err
+			}
+			keys = append(keys, key)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM message_search WHERE thread_id = ?", id); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM messages WHERE thread_id = ?", id); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM threads WHERE id = ?", id); err != nil {
+		result, err := tx.ExecContext(ctx, "DELETE FROM threads WHERE id = ? AND mailbox_id = ?", id, mailboxID)
+		if err != nil {
 			return err
 		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if deleted != 1 {
+			return ErrNotFound
+		}
 		if len(keys) > 0 {
-			payload, _ := json.Marshal(map[string][]string{"keys": keys})
-			_, _, err := enqueueJob(ctx, tx, "delete_objects", "delete-thread:"+id, string(payload), 100, 20, time.Now())
+			payload, err := json.Marshal(map[string][]string{"keys": keys})
+			if err != nil {
+				return err
+			}
+			_, _, err = enqueueJob(ctx, tx, "delete_objects", "delete-thread:"+id, string(payload), 100, 20, time.Now())
 			return err
 		}
 		return nil

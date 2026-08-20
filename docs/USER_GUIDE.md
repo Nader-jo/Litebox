@@ -19,10 +19,13 @@ account. Revoke anything you do not recognize. Revoking the current session
 signs that browser out immediately.
 
 If you forget your password, select **Forgot your password?** on the sign-in
-page. Reset links are single-use and expire after 30 minutes; changing the
-password signs out every existing session. Mailbox invitations are also
-single-use links and expire after 72 hours. An invitation recipient chooses a
-password before access is granted.
+page. The confirmation is intentionally the same for every address, and email
+delivery happens in the background; allow a moment for it to arrive. Reset
+links are single-use and expire after 30 minutes; changing the password signs
+out every existing session. If no message arrives after provider service is
+restored, request another link or ask an operator to check delivery logs.
+Mailbox invitations are also single-use links and expire after 72 hours. An
+invitation recipient chooses a password before access is granted.
 
 ## Understand the folders
 
@@ -92,10 +95,12 @@ after:2026-01-01
 before:2026-08-01
 ```
 
-Searches never change or move messages. Saved searches, automatic filters,
-labels, and mail rules are not available yet. If you need that workflow, share
-the concrete use case in a feature request rather than expecting a hidden
-filter configuration.
+Searches never change or move messages and always exclude Trash. A malformed
+value for one of the documented operators displays an error. An unknown colon
+term such as `label:finance` is searched as literal text; it does not activate a
+hidden filter. Saved searches, automatic filters, labels, and mail rules are not
+available yet. If you need that workflow, share the concrete use case in a
+feature request.
 
 ## Keyboard shortcuts
 
@@ -151,5 +156,6 @@ error.
   email bodies, or attachments in a public issue.
 
 For help, see [Support](../SUPPORT.md). Operators should use the
-[deployment guide](DEPLOYMENT.md), [upgrade guide](UPGRADING.md), and
+[deployment guide](DEPLOYMENT.md), [configuration reference](CONFIGURATION.md),
+[upgrade guide](UPGRADING.md), and
 [backup guide](BACKUP_AND_RESTORE.md).

@@ -61,7 +61,12 @@
       a: "/archive",
       t: "/trash",
     };
-    if (destinations[key]) window.location.assign(destinations[key]);
+    if (destinations[key]) {
+      const destination = new URL(destinations[key], window.location.origin);
+      const mailbox = new URLSearchParams(window.location.search).get("mailbox");
+      if (mailbox) destination.searchParams.set("mailbox", mailbox);
+      window.location.assign(`${destination.pathname}${destination.search}`);
+    }
   };
 
   const restoreSubmitting = (form) => {

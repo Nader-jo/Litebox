@@ -26,7 +26,7 @@ import (
 func TestFirstRunLoginAndCSRF(t *testing.T) {
 	baseURL, _ := url.Parse("http://localhost:8080")
 	root := t.TempDir()
-	cfg := config.Config{Environment: "test", BaseURL: baseURL, ListenAddr: ":8080", DataDir: root,
+	cfg := config.Config{Environment: "development", BaseURL: baseURL, ListenAddr: ":8080", DataDir: root,
 		DBPath: filepath.Join(root, "mailbox.db"), CookieName: "test_session", SessionTTL: time.Hour, LogLevel: "error",
 		PrimaryAddress: "hello@example.com", DisplayName: "Example", AllowedRecipients: map[string]struct{}{"hello@example.com": {}},
 		ResendWebhookSecret: "whsec_" + base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901")),
@@ -72,7 +72,8 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 	}
 	response.Body.Close()
 	setup := url.Values{"email": {"owner@example.com"}, "display_name": {"Owner"},
-		"password": {"correct horse battery staple"}, "password_confirmation": {"correct horse battery staple"}}
+		"password": {"correct horse battery staple"}, "password_confirmation": {"correct horse battery staple"},
+		"primary_address": {"mail@example.com"}}
 	response, err = client.PostForm(server.URL+"/setup", setup)
 	if err != nil || response.StatusCode != http.StatusSeeOther {
 		t.Fatal(response, err)
@@ -90,8 +91,8 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	response.Body.Close()
-	if !strings.Contains(string(body), "Litebox") || response.Header.Get("Content-Security-Policy") == "" {
-		t.Fatal("missing app shell or security headers")
+	if !strings.Contains(string(body), "Litebox") || response.Header.Get("Content-Security-Policy") == "" || response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("missing app shell, security headers, or private cache policy")
 	}
 	csrf := ""
 	serverURL, _ := url.Parse(server.URL)
@@ -161,8 +162,8 @@ func TestFirstRunLoginAndCSRF(t *testing.T) {
 		t.Fatalf("stored attachment: %#v err=%v", storedDraft.Attachments, err)
 	}
 	response, err = client.Get(server.URL + "/attachments/" + storedDraft.Attachments[0].ID)
-	if err != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Disposition"), "attachment") {
-		t.Fatalf("download attachment status=%v disposition=%q err=%v", responseStatus(response), response.Header.Get("Content-Disposition"), err)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Disposition"), "attachment") || response.Header.Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("download attachment status=%v disposition=%q cache=%q err=%v", responseStatus(response), response.Header.Get("Content-Disposition"), response.Header.Get("Cache-Control"), err)
 	}
 	response.Body.Close()
 	for _, path := range []string{"/admin/jobs", "/admin/webhooks", "/admin/storage"} {

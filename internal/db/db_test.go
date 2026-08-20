@@ -2,9 +2,48 @@ package db
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestOpenEscapesSQLiteURIControlCharactersInPath(t *testing.T) {
+	ctx := context.Background()
+	directory := "directory#fragment"
+	if runtime.GOOS != "windows" {
+		directory = "directory?query#fragment"
+	}
+	databasePath := filepath.Join(t.TempDir(), directory, "mailbox.db")
+	database, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, "CREATE TABLE uri_path_test(value TEXT NOT NULL)"); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, "INSERT INTO uri_path_test(value) VALUES ('expected')"); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(databasePath); err != nil || info.Size() == 0 {
+		t.Fatalf("escaped database path was not created: info=%v err=%v", info, err)
+	}
+
+	database, err = Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var value string
+	if err := database.QueryRowContext(ctx, "SELECT value FROM uri_path_test").Scan(&value); err != nil || value != "expected" {
+		t.Fatalf("reopened escaped database value=%q err=%v", value, err)
+	}
+}
 
 func TestMigrateIsDeterministicAndEnforcesSQLiteFeatures(t *testing.T) {
 	ctx := context.Background()

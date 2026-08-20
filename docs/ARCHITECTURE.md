@@ -34,7 +34,11 @@ Litebox Go process
     +-- /data/objects/drafts/<draft-id>/<attachment-id>
 ```
 
-SQLite runs in WAL mode with foreign keys, a five-second busy timeout, `synchronous=NORMAL`, bounded connections, and FTS5. Blob bytes do not live in SQLite.
+SQLite runs in WAL mode with foreign keys, a five-second busy timeout,
+`synchronous=NORMAL`, bounded connections, and FTS5. Filesystem paths become
+escaped absolute `file:` URIs before SQLite sees them, including the read-only
+backup preflight, so `?` or `#` in a directory name cannot alter URI options.
+Blob bytes do not live in SQLite.
 
 ## Package boundaries
 
@@ -65,11 +69,21 @@ The durable relationship is `users -> mailbox_memberships -> mailboxes -> mailbo
 `owner` and `admin` may manage mailbox configuration and people, `member` may read and write mail, and `viewer` is read-only. Repository methods serving HTTP content require a mailbox ID and include it in reads and mutations. Attachment authorization joins through the owning message or draft. This prevents a valid identifier copied from one mailbox from crossing into another.
 
 Installation settings are persisted in SQLite after first-run setup. The public
-URL, session lifetime, log level, and encrypted Resend credentials can be
-updated under **Settings → System**; the instance master key remains deployment
-state under `/data/.litebox/master.key`. Invitation and password-reset tokens
-are single-use, expiring hashes. Each user can also configure one metadata-only
-daily or weekly summary scoped to accessible mailboxes.
+URL, session lifetime, log level, request/attachment limits, and encrypted
+Resend credentials come from that snapshot instead of being overwritten by
+later environment changes. Fields exposed under **Settings → System** update
+the running application; a log-level change also updates the active logger
+immediately. Setup claims the unconfigured installation/token, updates the
+primary mailbox, creates the first owner, and saves encrypted settings in one
+SQLite transaction, so concurrent submissions cannot leave partial state. The
+instance master key remains deployment state under
+`/data/.litebox/master.key`; a new installation publishes it before creating
+SQLite, while an existing database uses load-only key semantics. Invitation and
+password-reset tokens are single-use, expiring hashes. Password-reset delivery
+uses a bounded process-local email queue so the public request does not wait for
+the provider; it is intentionally not a durable job. Each user can also
+configure one metadata-only daily or weekly summary scoped to accessible
+mailboxes.
 
 ## Inbound state transition
 
@@ -86,8 +100,8 @@ sequenceDiagram
     H->>DB: event + deduplicated job (one transaction)
     H-->>R: 200 OK
     W->>DB: atomically lease job
-    W->>R: retrieve body, raw URL, attachment URLs
-    W->>B: atomic stream writes + SHA-256
+    W->>R: retrieve CID-formatted body, raw URL, attachment URLs
+    W->>B: bounded atomic stream writes + SHA-256
     W->>DB: message + recipients + thread + FTS + metadata
     W->>DB: complete event and job
 ```
@@ -97,7 +111,19 @@ Two keys prevent duplicate mail:
 - `webhook_events.svix_id` deduplicates one webhook delivery;
 - `messages(mailbox_id, resend_email_id)` and `jobs.dedupe_key=ingest:<email-id>` deduplicate provider-level replay under a different delivery ID while allowing one provider message to be archived independently in multiple destination mailboxes.
 
-Blob keys derived from provider resources are deterministic. `FileStore.Put` treats an existing byte-identical object as success and a content mismatch as a collision. A crash after a blob commit but before a database commit therefore remains retry-safe.
+If Resend redelivers the same received email under a different Svix ID, Litebox
+retains the second verified webhook as terminal `duplicate` rather than leaving
+a queued event without a job.
+
+Blob keys derived from provider resources are deterministic. `FileStore.Put`
+publishes a fully synced temporary inode with a no-replace commit, treats an
+existing byte-identical object as success, and treats a content mismatch as a
+collision. Concurrent writers cannot replace an immutable winner. A crash after
+a blob commit but before a database commit therefore remains retry-safe. The
+filesystem implementation first attempts a hard-link publication. Where hard
+links are unavailable, an adjacent `.litebox-lock` serializes an atomic rename;
+blob waits honor context cancellation and all waits fail with the exact lock
+path after a bounded timeout rather than guessing that a lock is stale.
 
 ## Outbound state transition
 
@@ -111,7 +137,11 @@ Sending a draft is a local transaction:
 6. delete the draft;
 7. commit and immediately show `Queued`.
 
-The worker uses `litebox-send/<message-id>` for every provider retry. Local `resend_email_id` is the long-lived duplicate-send guard because provider idempotency windows are finite.
+The worker uses `litebox-send/<message-id>` for every provider retry. Before any
+provider call, it recomputes each stored attachment's size and SHA-256 digest;
+a mismatch becomes a permanent local integrity error. Local `resend_email_id`
+is the long-lived duplicate-send guard because provider idempotency windows are
+finite.
 
 Provider lifecycle events are immutable rows. The aggregate message state uses explicit terminal precedence rather than arrival order.
 
@@ -127,7 +157,11 @@ If the evidence is uncertain, Litebox creates a new thread. Outbound replies pre
 
 ## HTML and attachment boundary
 
-The raw message is archived before normalized content becomes the long-term source of truth. The display path:
+Litebox attempts to archive the raw message before normalized content becomes
+the long-term source of truth. A raw archive over the configured upload cap is
+omitted and the readable message is committed as `ready_without_raw`. Litebox
+explicitly requests `html_format=cid` from Resend so inline references remain
+identifiable instead of arriving as `data:` URLs. The display path:
 
 1. parses HTML;
 2. rewrites known `cid:` images to authenticated inline routes;
@@ -136,13 +170,35 @@ The raw message is archived before normalized content becomes the long-term sour
 5. stores only sanitized HTML for normal rendering;
 6. enforces a CSP that forbids external image, script, frame, and object sources.
 
-Attachment routes authenticate before looking up a logical object. SVG and HTML never render inline. Storage keys and absolute paths never appear in the browser.
+Attachment routes authenticate before looking up a logical object. SVG and HTML
+never render inline. Dynamic HTML and authenticated attachment responses use
+`Cache-Control: no-store`; storage keys and absolute paths never appear in the
+browser. Multipart forms keep at most 4 MiB of file parts in memory, spill the
+remainder to the process temporary directory, and remove those temporary files
+after handling the request.
 
 ## Jobs and recovery
 
-Workers atomically change one runnable job to `running`, increment the attempt counter, and set `lease_owner`/`leased_until`. Expired leases return to the queue. Failures use bounded exponential backoff with jitter. A permanent error or exhausted attempt budget enters `dead` and is visible/retryable in the system page.
+Workers atomically change one runnable job to `running`, increment the attempt
+counter, and set `lease_owner`/`leased_until`. A worker renews the lease while a
+handler is active. Completion, retry, and dead-letter transitions are accepted
+only from the current lease owner, so a stalled worker cannot overwrite a job
+reclaimed by another worker. Expired, unrenewed leases return to the queue.
+Failures use bounded exponential backoff with jitter. A permanent error or
+exhausted attempt budget enters `dead` and is visible/retryable in the system
+page.
 
-Inbound jobs use a final best-effort attempt: readable mail can become `ready_without_raw`, and an unavailable attachment becomes visible with storage-error metadata instead of hiding the whole email forever.
+The process scheduler runs maintenance every minute. A UTC-date dedupe key
+enqueues one expired-session cleanup per day even when a long-lived process
+crosses midnight; the same pass also schedules due summaries.
+
+Inbound jobs use bounded, best-effort archival. The raw `.eml` uses the upload
+cap; attachments share one aggregate per-message byte budget and only the first
+configured count are processed. A deterministic raw-size violation immediately
+produces `ready_without_raw`, and an over-budget attachment remains visible with
+storage-error metadata. Transient provider/storage failures retry until the
+final best-effort attempt, when the same degraded states keep readable mail from
+being hidden forever.
 
 ## Future S3 adapter
 

@@ -4,6 +4,103 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Add a configuration-lifecycle reference covering deployment settings,
+  new-volume bootstrap values, SQLite-backed seeds, validation, and Compose-only
+  variables.
+
+### Changed
+
+- Request Resend received-email HTML with `html_format=cid` so authenticated
+  inline-image rewriting remains compatible with the sanitizer's `data:` URL
+  rejection.
+- Refactor command startup so `litebox migrate` opens and migrates only SQLite,
+  without creating a master key or mailbox, initializing provider/storage
+  services, enqueueing jobs, or starting HTTP infrastructure.
+- Handle CLI help, version, unknown commands, invalid flags, missing required
+  options, and unexpected positional arguments before loading configuration or
+  touching installation data.
+- Keep request and attachment limits SQLite-backed after setup, and apply saved
+  log-level changes to the active logger immediately.
+- Rotate and print a fresh setup token on every unconfigured production startup
+  so restarting replaces a lost link and invalidates the previous token.
+- Complete first-run setup as one transaction covering the token claim, primary
+  mailbox, first owner, and encrypted settings, with rollback on any failure.
+- Renew leases while durable jobs run and require lease ownership for completion,
+  retry, and dead-letter transitions.
+- Publish immutable filesystem blobs without replacing an existing key, and
+  move draft submission/deletion, object-cleanup enqueueing, account-token
+  consumption, and delivery-event reduction into race-safe transactions.
+- Fall back to lock-serialized atomic rename when a filesystem cannot publish
+  with hard links; honor cancellation while blob writers wait and report the
+  exact `.litebox-lock` path for deliberate stale-lock recovery.
+- Render summary periods in each subscriber's configured time zone and discard
+  work for subscriptions disabled after enqueue.
+- Run the maintenance scheduler every minute so its UTC-date-deduplicated
+  expired-session cleanup is enqueued after midnight as well as at startup.
+- Cache the SQLite and two-directory writable readiness probe for five seconds
+  to bound healthcheck I/O without making readiness depend on Resend.
+- Parse multipart uploads with a fixed 4 MiB file-part memory threshold, spill
+  larger parts to bounded temporary storage, and clean request spill files.
+- Apply configured raw-size, aggregate attachment-byte, and attachment-count
+  limits to inbound archival. Oversized raw mail remains readable without its
+  raw archive, while over-budget attachments retain unavailable metadata rather
+  than hiding the message or retrying a deterministic limit failure.
+- Require an existing installation to load its regular 32-byte master key before
+  opening or migrating SQLite, while a new installation publishes the key before
+  database creation. Keep `STORAGE_TMP_ROOT` as private scratch space while
+  staging immutable blob commits beside their final destination.
+- Correct deployment, recovery, release, search, configuration, and contributor
+  documentation, including the `v0.4.1` deployment-template erratum and the
+  optional Caddy profile required for the supplied public-HTTPS path.
+
+### Fixed
+
+- Preserve the active mailbox query parameter across keyboard navigation,
+  settings forms, redirects, and other navigable actions so separate browser
+  tabs retain independent mailbox context.
+- Describe development as a real-provider-capable mode rather than a transport
+  kill switch, and describe `create-admin` as bootstrap/recovery rather than a
+  complete headless setup flow.
+- Escape absolute SQLite file URIs for normal and backup opens so path characters
+  such as `?` and `#` cannot become URI controls.
+- Mark an inbound replay of the same provider email under a different Svix ID as
+  terminal `duplicate` when its provider-level job deduplicates.
+
+### Security
+
+- Reject unknown `APP_ENV` and `APP_LOG_LEVEL` values instead of silently
+  weakening production-only checks or falling back to a different log level.
+- Reject malformed public origins, listeners, cookie names, and trusted-proxy
+  CIDRs, numeric values above supported safety bounds, and overflowing duration
+  conversions during configuration validation.
+- Cap webhook/text values at 16 MiB, uploads at 128 MiB, aggregate attachments
+  at 64 MiB, attachment count at 100, and workers at 32; also enforce a 256 MiB
+  worker/attachment budget, a 50 ms minimum poll, and at most 64 claim attempts
+  per second.
+- Require HTTPS for provider downloads and redirects in production, and reject
+  localhost plus loopback, private, carrier-grade NAT, link-local, benchmark,
+  documentation, unspecified, and reserved IP targets both before and after DNS
+  resolution.
+- Bound concurrent Argon2 password verification, perform a dummy verification
+  for unknown accounts, and enforce both per-account and per-IP login limits.
+- Give password-reset requests separate per-account/per-IP limits and a generic
+  minimum-duration response, then deliver known-account notifications through a
+  bounded process-local queue so provider timing cannot enumerate accounts.
+- Trust `X-Forwarded-For` only from configured direct peers and walk proxy chains
+  right-to-left across trusted hops; malformed chains fall back to the peer IP.
+- Reject cross-site browser submissions to unauthenticated setup, login,
+  invitation, and password-reset POST routes using fetch metadata plus
+  `Origin`/`Referer` validation, while retaining headerless non-browser clients.
+- Recompute outbound attachment size and SHA-256 before provider submission,
+  and mark dynamic HTML plus authenticated attachment responses `no-store`.
+- Preflight restore manifests for supported structure, canonical contained
+  source paths, exact database/key objects, a 32-byte key, a 16 MiB/100,000-blob
+  resource ceiling, unique logical blob keys, and valid size/digest metadata;
+  decrypt settings and match database references before writes, verify installed
+  content, and remove partial output after any failure.
+
 ## [0.4.1] - 2026-08-17
 
 ### Added
@@ -29,14 +126,16 @@ All notable changes to Litebox are documented here. The project follows [Keep a 
 
 ### Changed
 
-- Existing environment settings are imported once; runtime settings are subsequently managed under Settings → System.
-- Keep only deployment topology (database path, listener, storage paths, and trusted proxies) in environment configuration.
-- Publish one signed GHCR manifest for Linux AMD64 and ARM64 instead of bundling native binaries, installers, or VPS archives.
+- Import product-setting seeds once and treat SQLite as the source of truth
+  afterward; manage the fields exposed by the product under Settings → System.
+- Keep deployment topology, worker/proxy controls, and new-volume bootstrap
+  seeds in environment configuration.
+- Publish one provenance-attested GHCR manifest for Linux AMD64 and ARM64 instead of bundling native binaries, installers, or VPS archives.
 
 ### Security
 
 - Protect first-run setup with a one-time token printed to production container logs.
-- Never include message content in scheduled summaries; preserve the master-key file alongside backups or provide it separately during restore.
+- Never include message content in scheduled summaries; include the matching master-key file in the protected backup and restore it with the database and blobs.
 
 ## [0.3.1] - 2026-08-17
 

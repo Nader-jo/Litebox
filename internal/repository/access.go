@@ -157,32 +157,36 @@ func (r *Repository) UpdatePrimaryMailbox(ctx context.Context, value, displayNam
 	if displayName == "" || len(displayName) > 128 {
 		return fmt.Errorf("display name must be between 1 and 128 characters")
 	}
-	now := millis(time.Now())
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
-		var mailboxID string
-		if err := tx.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1").Scan(&mailboxID); err != nil {
-			return err
-		}
-		var existingMailbox string
-		var existingPrimary int
-		if err := tx.QueryRowContext(ctx, "SELECT mailbox_id, is_primary FROM mailbox_addresses WHERE address = ? LIMIT 1", address).Scan(&existingMailbox, &existingPrimary); err == nil {
-			if existingMailbox != mailboxID {
-				return fmt.Errorf("address is already assigned to another mailbox")
-			}
-			if existingPrimary == 0 {
-				if _, err := tx.ExecContext(ctx, "DELETE FROM mailbox_addresses WHERE mailbox_id = ? AND address = ? AND is_primary = 0", mailboxID, address); err != nil {
-					return err
-				}
-			}
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE mailboxes SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE id = ?", address, local, domain, displayName, now, mailboxID); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx, "UPDATE mailbox_addresses SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE mailbox_id = ? AND is_primary = 1", address, local, domain, displayName, now, mailboxID)
-		return err
+		return updatePrimaryMailboxTx(ctx, tx, address, local, domain, displayName)
 	})
+}
+
+func updatePrimaryMailboxTx(ctx context.Context, tx *sql.Tx, address, local, domain, displayName string) error {
+	now := millis(time.Now())
+	var mailboxID string
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM mailboxes WHERE is_primary = 1 LIMIT 1").Scan(&mailboxID); err != nil {
+		return err
+	}
+	var existingMailbox string
+	var existingPrimary int
+	if err := tx.QueryRowContext(ctx, "SELECT mailbox_id, is_primary FROM mailbox_addresses WHERE address = ? LIMIT 1", address).Scan(&existingMailbox, &existingPrimary); err == nil {
+		if existingMailbox != mailboxID {
+			return fmt.Errorf("address is already assigned to another mailbox")
+		}
+		if existingPrimary == 0 {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM mailbox_addresses WHERE mailbox_id = ? AND address = ? AND is_primary = 0", mailboxID, address); err != nil {
+				return err
+			}
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE mailboxes SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE id = ?", address, local, domain, displayName, now, mailboxID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, "UPDATE mailbox_addresses SET address = ?, local_part = ?, domain = ?, display_name = ?, updated_at = ? WHERE mailbox_id = ? AND is_primary = 1", address, local, domain, displayName, now, mailboxID)
+	return err
 }
 
 var aliasColors = []string{"#e0f2fe", "#dcfce7", "#fef3c7", "#fce7f3", "#ede9fe", "#ffedd5", "#ccfbf1", "#f3e8ff"}

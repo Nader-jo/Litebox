@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Nader-jo/Litebox/internal/ids"
+	mailx "github.com/Nader-jo/Litebox/internal/mail"
 	"github.com/Nader-jo/Litebox/internal/model"
 )
 
@@ -35,8 +36,15 @@ func (r *Repository) PersistWebhook(ctx context.Context, event model.WebhookEven
 	if inserted == 0 {
 		return false, rollback(tx, nil)
 	}
-	if _, _, err := enqueueJob(ctx, tx, jobKind, dedupeKey, string(encoded), 50, 10, time.Now()); err != nil {
+	_, jobInserted, err := enqueueJob(ctx, tx, jobKind, dedupeKey, string(encoded), 50, 10, time.Now())
+	if err != nil {
 		return false, rollback(tx, err)
+	}
+	if !jobInserted {
+		if _, err := tx.ExecContext(ctx, `UPDATE webhook_events SET processing_status = 'duplicate', processed_at = ?
+			WHERE id = ?`, millis(time.Now()), event.ID); err != nil {
+			return false, rollback(tx, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
@@ -84,7 +92,7 @@ func (r *Repository) ListWebhooks(ctx context.Context, limit int) ([]model.Webho
 }
 
 // StoreProviderEvent deduplicates a delivery event and advances an outbound message state.
-func (r *Repository) StoreProviderEvent(ctx context.Context, svixID, resendID, eventType, payload, status string, eventAt time.Time) error {
+func (r *Repository) StoreProviderEvent(ctx context.Context, svixID, resendID, eventType, payload string, eventAt time.Time) error {
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO provider_events
             (id, svix_id, resend_email_id, event_type, event_at, payload_json, created_at)
@@ -96,29 +104,28 @@ func (r *Repository) StoreProviderEvent(ctx context.Context, svixID, resendID, e
 		if err != nil || inserted == 0 {
 			return err
 		}
+		var current sql.NullString
+		var occurred sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT delivery_status, last_provider_event_at FROM messages
+			WHERE resend_email_id = ? AND direction = 'outbound'`, resendID).Scan(&current, &occurred); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		var currentAt time.Time
+		if occurred.Valid {
+			currentAt = fromMillis(occurred.Int64)
+		}
+		status := mailx.ReduceDelivery(current.String, currentAt, eventType, eventAt)
+		effectiveAt := eventAt
+		if currentAt.After(effectiveAt) {
+			effectiveAt = currentAt
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE messages SET delivery_status = ?, last_provider_event_at = ?, updated_at = ?
-            WHERE resend_email_id = ?`, status, millis(eventAt), millis(time.Now()), resendID)
+			WHERE resend_email_id = ? AND direction = 'outbound'`, status, millis(effectiveAt), millis(time.Now()), resendID)
 		return err
 	})
-}
-
-// MessageDelivery returns the current aggregate status and provider event timestamp.
-func (r *Repository) MessageDelivery(ctx context.Context, resendID string) (string, time.Time, error) {
-	var status sql.NullString
-	var occurred sql.NullInt64
-	err := r.db.QueryRowContext(ctx, `SELECT delivery_status, last_provider_event_at FROM messages
-        WHERE resend_email_id = ? AND direction = 'outbound'`, resendID).Scan(&status, &occurred)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", time.Time{}, ErrNotFound
-	}
-	if err != nil {
-		return "", time.Time{}, err
-	}
-	var at time.Time
-	if occurred.Valid {
-		at = fromMillis(occurred.Int64)
-	}
-	return status.String, at, nil
 }
 
 // WebhookByID loads one verified event for worker processing.

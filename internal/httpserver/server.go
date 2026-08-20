@@ -5,14 +5,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Nader-jo/Litebox/internal/auth"
@@ -38,25 +41,54 @@ type authState struct {
 
 // Server owns HTTP routing and middleware.
 type Server struct {
-	config      config.Config
-	repository  *repository.Repository
-	store       blobstore.Store
-	provider    provider.Client
-	mailbox     *service.Mailbox
-	logger      *slog.Logger
-	http        *http.Server
-	trusted     []*net.IPNet
-	login       *loginLimiter
-	send        *windowLimiter
-	settings    *settings.Store
-	applyConfig func(config.Config)
+	config        atomic.Pointer[config.Config]
+	repository    *repository.Repository
+	store         blobstore.Store
+	provider      provider.Client
+	mailbox       *service.Mailbox
+	logger        *slog.Logger
+	http          *http.Server
+	trusted       []*net.IPNet
+	loginAccount  *windowLimiter
+	loginIP       *windowLimiter
+	resetAccount  *windowLimiter
+	resetIP       *windowLimiter
+	send          *windowLimiter
+	passwordSlots chan struct{}
+	dummyPassword string
+	settings      *settings.Store
+	settingsMu    sync.Mutex
+	readinessMu   sync.Mutex
+	readinessAt   time.Time
+	readinessErr  error
+	applyConfig   func(config.Config)
+	accountEmails chan accountEmail
+	emailStart    sync.Once
+	emailCancel   context.CancelFunc
+	emailWait     sync.WaitGroup
+	emailClose    sync.Once
+}
+
+type accountEmail struct {
+	recipient      string
+	subject        string
+	body           string
+	resetUserID    string
+	resetTokenHash []byte
+	resetTTL       time.Duration
 }
 
 // New builds the complete HTTP server without starting a listener.
 func New(cfg config.Config, repo *repository.Repository, store blobstore.Store, providerClient provider.Client, mailbox *service.Mailbox, logger *slog.Logger) (*Server, error) {
-	server := &Server{config: cfg, repository: repo, store: store, provider: providerClient, mailbox: mailbox,
-		logger: logger, login: &loginLimiter{attempts: make(map[string][]time.Time)},
-		send: newWindowLimiter(30, time.Hour)}
+	dummyPassword, err := auth.HashPassword("litebox-dummy-password")
+	if err != nil {
+		return nil, fmt.Errorf("initialize password verification: %w", err)
+	}
+	server := &Server{repository: repo, store: store, provider: providerClient, mailbox: mailbox,
+		logger: logger, loginAccount: newWindowLimiter(5, 10*time.Minute), loginIP: newWindowLimiter(25, 10*time.Minute),
+		resetAccount: newWindowLimiter(3, 10*time.Minute), resetIP: newWindowLimiter(20, 10*time.Minute), send: newWindowLimiter(30, time.Hour),
+		passwordSlots: make(chan struct{}, 4), dummyPassword: dummyPassword, accountEmails: make(chan accountEmail, 256)}
+	server.ApplyConfig(cfg)
 	for _, value := range cfg.TrustedProxyCIDRs {
 		_, network, err := net.ParseCIDR(value)
 		if err != nil {
@@ -82,6 +114,60 @@ func New(cfg config.Config, repo *repository.Repository, store blobstore.Store, 
 // HTTP returns the configured standard-library server.
 func (s *Server) HTTP() *http.Server { return s.http }
 
+// StartBackground begins bounded, process-local account-email delivery. It is
+// separate from New so a failed application assembly cannot leak a goroutine.
+func (s *Server) StartBackground() {
+	s.emailStart.Do(func() {
+		emailContext, cancelEmails := context.WithCancel(context.Background())
+		s.emailCancel = cancelEmails
+		s.emailWait.Add(1)
+		go s.accountEmailWorker(emailContext)
+	})
+}
+
+// Close stops process-local account email delivery before the repository is
+// closed. Password-reset requests can be repeated if shutdown interrupts one.
+func (s *Server) Close() {
+	s.emailClose.Do(func() {
+		if s.emailCancel != nil {
+			s.emailCancel()
+		}
+		s.emailWait.Wait()
+	})
+}
+
+func (s *Server) accountEmailWorker(ctx context.Context) {
+	defer s.emailWait.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case message := <-s.accountEmails:
+			sendContext, cancel := context.WithTimeout(ctx, time.Minute)
+			var err error
+			if message.resetUserID != "" {
+				err = s.repository.CreatePasswordResetForUser(sendContext, message.resetUserID, message.resetTokenHash, time.Now().UTC().Add(message.resetTTL))
+			}
+			if err == nil {
+				err = s.sendAccountEmail(sendContext, message.recipient, message.subject, message.body)
+			}
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				s.logger.Error("account email delivery failed", "error", err)
+			}
+		}
+	}
+}
+
+func (s *Server) enqueueAccountEmail(message accountEmail) bool {
+	select {
+	case s.accountEmails <- message:
+		return true
+	default:
+		return false
+	}
+}
+
 // Configure attaches persisted settings and the callback used after the setup
 // wizard commits a new runtime snapshot.
 func (s *Server) Configure(store *settings.Store, apply func(config.Config)) {
@@ -90,7 +176,12 @@ func (s *Server) Configure(store *settings.Store, apply func(config.Config)) {
 
 // ApplyConfig replaces reloadable runtime values. Listener and trust topology
 // remain fixed for the process lifetime.
-func (s *Server) ApplyConfig(cfg config.Config) { s.config = cfg }
+func (s *Server) ApplyConfig(cfg config.Config) {
+	snapshot := cfg
+	s.config.Store(&snapshot)
+}
+
+func (s *Server) currentConfig() config.Config { return *s.config.Load() }
 
 func (s *Server) routes(mux *http.ServeMux) {
 	staticFS, err := fs.Sub(webassets.Static, "static")
@@ -101,15 +192,15 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health/live", s.live)
 	mux.HandleFunc("GET /health/ready", s.ready)
 	mux.HandleFunc("GET /setup", s.setupPage)
-	mux.HandleFunc("POST /setup", s.setup)
+	mux.HandleFunc("POST /setup", s.requireSameOrigin(s.setup))
 	mux.HandleFunc("GET /login", s.loginPage)
-	mux.HandleFunc("POST /login", s.loginPost)
+	mux.HandleFunc("POST /login", s.requireSameOrigin(s.loginPost))
 	mux.HandleFunc("GET /invite", s.invitationPage)
-	mux.HandleFunc("POST /invite", s.acceptInvitation)
+	mux.HandleFunc("POST /invite", s.requireSameOrigin(s.acceptInvitation))
 	mux.HandleFunc("GET /password-reset", s.passwordResetPage)
-	mux.HandleFunc("POST /password-reset", s.requestPasswordReset)
+	mux.HandleFunc("POST /password-reset", s.requireSameOrigin(s.requestPasswordReset))
 	mux.HandleFunc("GET /password-reset/confirm", s.passwordResetConfirmPage)
-	mux.HandleFunc("POST /password-reset/confirm", s.consumePasswordReset)
+	mux.HandleFunc("POST /password-reset/confirm", s.requireSameOrigin(s.consumePasswordReset))
 	mux.HandleFunc("POST /webhooks/resend", s.webhook)
 
 	authenticated := func(handler http.HandlerFunc) http.Handler { return s.authenticate(s.csrf(handler)) }
@@ -222,37 +313,72 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// requireSameOrigin prevents login CSRF and cross-site submission of other
+// unauthenticated account forms. Non-browser clients without fetch metadata or
+// an Origin/Referer header remain supported.
+func (s *Server) requireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") || !s.sameOriginHeader(r) {
+			s.renderError(w, r, http.StatusForbidden, "Cross-site form submissions are not allowed.")
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) sameOriginHeader(r *http.Request) bool {
+	source := strings.TrimSpace(r.Header.Get("Origin"))
+	if source == "" {
+		source = strings.TrimSpace(r.Header.Get("Referer"))
+	}
+	if source == "" {
+		return true
+	}
+	parsed, err := url.Parse(source)
+	base := s.currentConfig().BaseURL
+	return err == nil && base != nil && parsed.Scheme == base.Scheme && strings.EqualFold(parsed.Host, base.Host)
+}
+
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(s.config.CookieName)
+		cfg := s.currentConfig()
+		cookie, err := r.Cookie(cfg.CookieName)
 		if err != nil || cookie.Value == "" {
 			s.redirectLogin(w, r)
 			return
 		}
 		session, err := s.repository.FindSession(r.Context(), auth.TokenHash(cookie.Value))
-		if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
 			s.clearCookies(w)
 			s.redirectLogin(w, r)
+			return
+		}
+		if err != nil {
+			s.internalError(w, r, err)
 			return
 		}
 		if time.Since(session.LastSeenAt) >= 5*time.Minute {
 			_ = s.repository.TouchSession(r.Context(), session.ID, session.User.ID, false)
 			session.LastSeenAt = time.Now().UTC()
 		}
-		csrfCookie, _ := r.Cookie(s.config.CookieName + "_csrf")
+		csrfCookie, _ := r.Cookie(cfg.CookieName + "_csrf")
 		csrfToken := ""
 		if csrfCookie != nil && auth.VerifyToken(csrfCookie.Value, session.CSRFHash) {
 			csrfToken = csrfCookie.Value
 		}
 		preferredMailbox := strings.TrimSpace(r.URL.Query().Get("mailbox"))
-		if mailboxCookie, cookieErr := r.Cookie(s.config.CookieName + "_mailbox"); cookieErr == nil {
+		if mailboxCookie, cookieErr := r.Cookie(cfg.CookieName + "_mailbox"); cookieErr == nil {
 			if preferredMailbox == "" {
 				preferredMailbox = mailboxCookie.Value
 			}
 		}
 		mailbox, err := s.repository.MailboxForUser(r.Context(), session.User.ID, preferredMailbox)
-		if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
 			s.renderError(w, r, http.StatusForbidden, "Your account does not have access to a mailbox.")
+			return
+		}
+		if err != nil {
+			s.internalError(w, r, err)
 			return
 		}
 		if r.URL.Query().Get("mailbox") == "" && preferredMailbox != mailbox.ID {
@@ -270,16 +396,23 @@ func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		state := authFrom(r)
+		cfg := s.currentConfig()
 		candidate := r.Header.Get("X-CSRF-Token")
 		if candidate == "" {
 			if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-				r.Body = http.MaxBytesReader(w, r.Body, s.config.MaxUploadRequestBytes)
-				if err := r.ParseMultipartForm(s.config.MaxUploadRequestBytes); err != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxUploadRequestBytes)
+				if err := r.ParseMultipartForm(4 << 20); err != nil {
 					s.renderError(w, r, http.StatusRequestEntityTooLarge, "The upload is too large.")
 					return
-				} else {
-					r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-					_ = r.ParseForm()
+				}
+				if r.MultipartForm != nil {
+					defer func() { _ = r.MultipartForm.RemoveAll() }()
+				}
+			} else {
+				r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxUploadRequestBytes)
+				if err := r.ParseForm(); err != nil {
+					s.renderError(w, r, http.StatusRequestEntityTooLarge, "The form is too large.")
+					return
 				}
 			}
 			candidate = r.FormValue("csrf_token")
@@ -295,19 +428,31 @@ func (s *Server) csrf(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) clientIP(r *http.Request) string {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
 	remote := net.ParseIP(host)
-	trusted := false
+	if remote == nil || !s.trustedProxy(remote) {
+		return host
+	}
+	forwarded := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	current := remote
+	for index := len(forwarded) - 1; index >= 0; index-- {
+		candidate := net.ParseIP(strings.TrimSpace(forwarded[index]))
+		if candidate == nil {
+			return host
+		}
+		current = candidate
+		if !s.trustedProxy(candidate) {
+			return candidate.String()
+		}
+	}
+	return current.String()
+}
+
+func (s *Server) trustedProxy(address net.IP) bool {
 	for _, network := range s.trusted {
-		if network.Contains(remote) {
-			trusted = true
-			break
+		if network.Contains(address) {
+			return true
 		}
 	}
-	if trusted {
-		if forwarded := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0]); net.ParseIP(forwarded) != nil {
-			return forwarded
-		}
-	}
-	return host
+	return false
 }
 
 func (s *Server) redirectLogin(w http.ResponseWriter, r *http.Request) {
@@ -320,24 +465,27 @@ func (s *Server) redirectLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setSessionCookies(w http.ResponseWriter, sessionToken, csrfToken string) {
-	maxAge := int(s.config.SessionTTL.Seconds())
-	http.SetCookie(w, &http.Cookie{Name: s.config.CookieName, Value: sessionToken, Path: "/", MaxAge: maxAge,
-		Expires: time.Now().Add(s.config.SessionTTL), HttpOnly: true, Secure: s.config.SecureCookies(), SameSite: http.SameSiteLaxMode})
-	http.SetCookie(w, &http.Cookie{Name: s.config.CookieName + "_csrf", Value: csrfToken, Path: "/", MaxAge: maxAge,
-		Expires: time.Now().Add(s.config.SessionTTL), HttpOnly: false, Secure: s.config.SecureCookies(), SameSite: http.SameSiteStrictMode})
+	cfg := s.currentConfig()
+	maxAge := int(cfg.SessionTTL.Seconds())
+	http.SetCookie(w, &http.Cookie{Name: cfg.CookieName, Value: sessionToken, Path: "/", MaxAge: maxAge,
+		Expires: time.Now().Add(cfg.SessionTTL), HttpOnly: true, Secure: cfg.SecureCookies(), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: cfg.CookieName + "_csrf", Value: csrfToken, Path: "/", MaxAge: maxAge,
+		Expires: time.Now().Add(cfg.SessionTTL), HttpOnly: false, Secure: cfg.SecureCookies(), SameSite: http.SameSiteStrictMode})
 }
 
 func (s *Server) clearCookies(w http.ResponseWriter) {
-	for _, name := range []string{s.config.CookieName, s.config.CookieName + "_csrf", s.config.CookieName + "_mailbox"} {
-		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == s.config.CookieName,
-			Secure: s.config.SecureCookies(), SameSite: http.SameSiteLaxMode})
+	cfg := s.currentConfig()
+	for _, name := range []string{cfg.CookieName, cfg.CookieName + "_csrf", cfg.CookieName + "_mailbox"} {
+		http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", MaxAge: -1, HttpOnly: name == cfg.CookieName,
+			Secure: cfg.SecureCookies(), SameSite: http.SameSiteLaxMode})
 	}
 }
 
 func (s *Server) setMailboxCookie(w http.ResponseWriter, mailboxID string) {
-	http.SetCookie(w, &http.Cookie{Name: s.config.CookieName + "_mailbox", Value: mailboxID, Path: "/",
-		MaxAge: int(s.config.SessionTTL.Seconds()), Expires: time.Now().Add(s.config.SessionTTL), HttpOnly: true,
-		Secure: s.config.SecureCookies(), SameSite: http.SameSiteLaxMode})
+	cfg := s.currentConfig()
+	http.SetCookie(w, &http.Cookie{Name: cfg.CookieName + "_mailbox", Value: mailboxID, Path: "/",
+		MaxAge: int(cfg.SessionTTL.Seconds()), Expires: time.Now().Add(cfg.SessionTTL), HttpOnly: true,
+		Secure: cfg.SecureCookies(), SameSite: http.SameSiteLaxMode})
 }
 
 func authFrom(r *http.Request) authState {
@@ -355,63 +503,90 @@ func ipHash(value string) []byte {
 	return hash[:]
 }
 
-type loginLimiter struct {
-	mu       sync.Mutex
-	attempts map[string][]time.Time
-}
-
-func (l *loginLimiter) allow(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	cutoff := time.Now().Add(-10 * time.Minute)
-	values := l.attempts[key][:0]
-	for _, value := range l.attempts[key] {
-		if value.After(cutoff) {
-			values = append(values, value)
-		}
-	}
-	l.attempts[key] = values
-	return len(values) < 5
-}
-
-func (l *loginLimiter) fail(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.attempts[key] = append(l.attempts[key], time.Now())
-}
-
-func (l *loginLimiter) success(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.attempts, key)
-}
-
 type windowLimiter struct {
-	mu     sync.Mutex
-	events map[string][]time.Time
-	limit  int
-	window time.Duration
-	now    func() time.Time
+	mu        sync.Mutex
+	events    map[string][]time.Time
+	limit     int
+	window    time.Duration
+	maxKeys   int
+	lastSweep time.Time
+	now       func() time.Time
 }
 
 func newWindowLimiter(limit int, window time.Duration) *windowLimiter {
-	return &windowLimiter{events: make(map[string][]time.Time), limit: limit, window: window, now: time.Now}
+	return &windowLimiter{events: make(map[string][]time.Time), limit: limit, window: window, maxKeys: 10_000, now: time.Now}
 }
 
 func (l *windowLimiter) take(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	cutoff := l.now().Add(-l.window)
-	values := l.events[key][:0]
-	for _, value := range l.events[key] {
-		if value.After(cutoff) {
-			values = append(values, value)
+	key = limiterStorageKey(key)
+	now := l.now()
+	cutoff := now.Add(-l.window)
+	if l.lastSweep.IsZero() || now.Sub(l.lastSweep) >= l.window/4 {
+		for candidate, events := range l.events {
+			events = currentEvents(events, cutoff)
+			if len(events) == 0 {
+				delete(l.events, candidate)
+			} else {
+				l.events[candidate] = events
+			}
 		}
+		l.lastSweep = now
 	}
+	if _, exists := l.events[key]; !exists && len(l.events) >= l.maxKeys {
+		return false
+	}
+	values := currentEvents(l.events[key], cutoff)
 	if len(values) >= l.limit {
 		l.events[key] = values
 		return false
 	}
-	l.events[key] = append(values, l.now())
+	l.events[key] = append(values, now)
 	return true
+}
+
+func (l *windowLimiter) reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.events, limiterStorageKey(key))
+}
+
+func limiterStorageKey(key string) string {
+	digest := sha256.Sum256([]byte(key))
+	return string(digest[:])
+}
+
+func (s *Server) takeLoginAttempt(ip, account string) bool {
+	if !s.loginIP.take(ip) {
+		return false
+	}
+	return s.loginAccount.take(account)
+}
+
+func (s *Server) takeResetAttempt(ip, account string) bool {
+	if !s.resetIP.take(ip) {
+		return false
+	}
+	return s.resetAccount.take(account)
+}
+
+func (s *Server) hashPassword(ctx context.Context, password string) (string, error) {
+	select {
+	case s.passwordSlots <- struct{}{}:
+		defer func() { <-s.passwordSlots }()
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+	return auth.HashPassword(password)
+}
+
+func currentEvents(events []time.Time, cutoff time.Time) []time.Time {
+	values := events[:0]
+	for _, value := range events {
+		if value.After(cutoff) {
+			values = append(values, value)
+		}
+	}
+	return values
 }

@@ -283,7 +283,7 @@ templ ThreadRow(item model.ThreadSummary, data PageData) {
 		<div class="thread-subject">
 			<span>{ displaySubject(item.Subject) }</span>
 			if item.AliasAddress != "" {
-				<span class="alias-pill thread-alias" style={ "background-color: " + item.AliasColor }>@Icon("mail")<span>{ item.AliasAddress }</span></span>
+				<span class={ "alias-pill", "thread-alias", aliasColorClass(item.AliasColor) }>@Icon("mail")<span>{ item.AliasAddress }</span></span>
 			}
 			if item.IsStarred {
 				<span class="star" aria-label="Starred">@Icon("star")</span>
@@ -375,7 +375,7 @@ templ MessageCard(message model.Message, data PageData) {
 				</strong>
 				<small>{ message.From.Address }</small>
 				if message.AliasAddress != "" {
-					<span class="alias-pill" style={ "background-color: " + message.AliasColor }>@Icon("mail")<span>{ message.AliasAddress }</span></span>
+					<span class={ "alias-pill", aliasColorClass(message.AliasColor) }>@Icon("mail")<span>{ message.AliasAddress }</span></span>
 				}
 			</div>
 			<div class="message-time">
@@ -576,16 +576,16 @@ templ MailboxSettings(data PageData) {
 		<div class="address-list">
 			for _, address := range data.Addresses {
 				<div>
-					<span class="address-identity"><span class="alias-color-dot" style={ "background-color: " + address.Color } aria-hidden="true"></span><strong>{ address.Address }</strong>
+					<span class="address-identity"><span class={ "alias-color-dot", aliasColorClass(address.Color) } aria-hidden="true"></span><strong>{ address.Address }</strong>
 						if address.IsPrimary {
 							<small class="badge">Primary</small>
 						}
 						<small>{ address.DisplayName }</small>
 					</span>
 					if data.CanManage {
-						<form class="alias-color-form" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/color", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label><span class="sr-only">Color for { address.Address }</span><select name="color" aria-label={ "Color for " + address.Address } style={ "background-color: " + address.Color } data-auto-submit>
+						<form class="alias-color-form" method="post" action={ templ.SafeURL(mailboxURL("/mailboxes/" + data.Mailbox.ID + "/aliases/" + address.ID + "/color", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><label><span class="sr-only">Color for { address.Address }</span><select name="color" aria-label={ "Color for " + address.Address } class={ aliasColorClass(address.Color) } data-auto-submit>
 							for _, color := range aliasPalette() {
-								<option value={ color } style={ "background-color: " + color } selected?={ color == address.Color }>{ color }</option>
+								<option value={ color } class={ aliasColorClass(color) } selected?={ color == address.Color }>{ color }</option>
 							}
 						</select></label></form>
 						if !address.IsPrimary {
@@ -645,7 +645,7 @@ templ SessionSettings(data PageData) {
 		<h2>Active sessions</h2><p class="section-copy">Each browser or device has a separate revocable session. Changing your password revokes every session.</p>
 		<div class="session-list">
 			for _, session := range data.Sessions {
-				<div><span><strong>{ sessionLabel(session.UserAgent) }</strong><small>Last active { relativeTime(session.LastSeenAt) } · expires { fullTime(session.ExpiresAt) }</small></span><form method="post" action={ templ.SafeURL("/sessions/" + session.ID + "/revoke") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="button button-ghost danger" type="submit">
+				<div><span><strong>{ sessionLabel(session.UserAgent) }</strong><small>Last active { relativeTime(session.LastSeenAt) } · expires { fullTime(session.ExpiresAt) }</small></span><form method="post" action={ templ.SafeURL(mailboxURL("/sessions/" + session.ID + "/revoke", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="button button-ghost danger" type="submit">
 					if session.ID == data.CurrentSession {
 						Sign out this session
 					} else {
@@ -686,7 +686,7 @@ templ SystemSettings(data PageData) {
 								<td>{ relativeTime(job.UpdatedAt) }</td>
 								<td>
 									if job.Status == "dead" || job.Status == "failed" {
-										<form method="post" action={ templ.SafeURL("/admin/jobs/" + job.ID + "/retry") }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Retry</button></form>
+										<form method="post" action={ templ.SafeURL(mailboxURL("/admin/jobs/" + job.ID + "/retry", data)) }><input type="hidden" name="csrf_token" value={ data.CSRFToken }/><button class="link-button" type="submit">Retry</button></form>
 									}
 								</td>
 							</tr>

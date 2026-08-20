@@ -149,7 +149,7 @@ func TestAccountsSessionsWebhooksAndJobs(t *testing.T) {
 	if err != nil || job.Kind != "ingest_inbound" || job.AttemptCount != 1 {
 		t.Fatal(job, err)
 	}
-	if err := repo.FailJob(ctx, job.ID, "safe failure", time.Now(), false); err != nil {
+	if err := repo.FailJob(ctx, job.ID, "worker", "safe failure", time.Now(), false); err != nil {
 		t.Fatal(err)
 	}
 	retry, err := repo.ClaimJob(ctx, "worker", time.Minute)
@@ -269,5 +269,53 @@ func TestExpiredJobLeaseIsRecovered(t *testing.T) {
 	reclaimed, err := repo.ClaimJob(ctx, "replacement-worker", time.Minute)
 	if err != nil || reclaimed.ID != id || reclaimed.AttemptCount != 2 || reclaimed.LeaseOwner != "replacement-worker" {
 		t.Fatalf("expired job was not reclaimed: %#v err=%v", reclaimed, err)
+	}
+}
+
+func TestJobLeaseOwnerFencesStaleWorkersAndRenews(t *testing.T) {
+	ctx := context.Background()
+	repo := testRepository(t)
+	id, inserted, err := repo.EnqueueJob(ctx, "test", "lease:fencing", `{}`, 100, 3, time.Now().Add(-time.Second))
+	if err != nil || !inserted {
+		t.Fatal(id, inserted, err)
+	}
+	first, err := repo.ClaimJob(ctx, "stale-worker", -time.Second)
+	if err != nil || first.ID != id {
+		t.Fatal(first, err)
+	}
+	replacement, err := repo.ClaimJob(ctx, "replacement-worker", time.Minute)
+	if err != nil || replacement.ID != id || replacement.LeaseOwner != "replacement-worker" {
+		t.Fatal(replacement, err)
+	}
+
+	if err := repo.CompleteJob(ctx, id, "stale-worker"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale completion returned %v, want ErrLeaseLost", err)
+	}
+	if err := repo.FailJob(ctx, id, "stale-worker", "stale failure", time.Now(), true); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("stale failure returned %v, want ErrLeaseLost", err)
+	}
+
+	jobs, err := repo.ListJobs(ctx, 10)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != "running" || jobs[0].LeaseOwner != "replacement-worker" || jobs[0].LeasedUntil == nil {
+		t.Fatalf("stale worker changed replacement lease: %#v err=%v", jobs, err)
+	}
+	initialExpiry := *jobs[0].LeasedUntil
+	if err := repo.RenewJobLease(ctx, id, "replacement-worker", 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err = repo.ListJobs(ctx, 10)
+	if err != nil || len(jobs) != 1 || jobs[0].LeasedUntil == nil || !jobs[0].LeasedUntil.After(initialExpiry) {
+		t.Fatalf("lease was not extended: %#v err=%v", jobs, err)
+	}
+
+	if err := repo.CompleteJob(ctx, id, "replacement-worker"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.FailJob(ctx, id, "replacement-worker", "late failure", time.Now(), false); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("terminal job accepted a late failure: %v", err)
+	}
+	jobs, err = repo.ListJobs(ctx, 10)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != "succeeded" || jobs[0].LeaseOwner != "" {
+		t.Fatalf("unexpected terminal job: %#v err=%v", jobs, err)
 	}
 }

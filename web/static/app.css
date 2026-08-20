@@ -206,6 +206,14 @@ input:focus, textarea:focus, select:focus { border-color: #8bb1ff; box-shadow: 0
 .message-sender small { color: var(--muted); font-size: 11px; }
 .alias-pill { display: inline-flex; width: fit-content; align-items: center; gap: 4px; margin-top: 4px; padding: 3px 7px; border-radius: 999px; color: #24364b; font-size: 10px; font-weight: 750; }
 .alias-pill .ui-icon { width: 11px; height: 11px; }
+.alias-color-1 { background-color: #e0f2fe; }
+.alias-color-2 { background-color: #dcfce7; }
+.alias-color-3 { background-color: #fef3c7; }
+.alias-color-4 { background-color: #fce7f3; }
+.alias-color-5 { background-color: #ede9fe; }
+.alias-color-6 { background-color: #ffedd5; }
+.alias-color-7 { background-color: #ccfbf1; }
+.alias-color-8 { background-color: #f3e8ff; }
 .message-time { display: grid; justify-items: end; gap: 3px; margin-left: auto; color: var(--muted); font-size: 11px; }
 .recipients { padding: 0 17px 12px 65px; color: var(--muted); font-size: 11px; }
 .recipients summary { overflow: hidden; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }

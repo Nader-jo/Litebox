@@ -74,6 +74,14 @@ func (s *Store) Load(ctx context.Context) (Values, error) {
 
 // Save atomically replaces the editable settings and encrypted credentials.
 func (s *Store) Save(ctx context.Context, value Values) error {
+	return s.save(ctx, s.db, value)
+}
+
+type contextExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func (s *Store) save(ctx context.Context, executor contextExecer, value Values) error {
 	key, err := encryptOptional(s.key, value.ResendAPIKey, "resend_api_key")
 	if err != nil {
 		return err
@@ -86,7 +94,7 @@ func (s *Store) Save(ctx context.Context, value Values) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE installation_settings SET configured = ?, base_url = ?,
+	result, err := executor.ExecContext(ctx, `UPDATE installation_settings SET configured = ?, base_url = ?,
         session_ttl_hours = ?, log_level = ?, max_webhook_body_bytes = ?, max_message_text_bytes = ?,
         max_upload_request_bytes = ?, max_outbound_attachment_bytes = ?, max_attachment_count = ?,
         resend_api_key = ?, resend_webhook_secret = ?, resend_domain_id = ?,
@@ -95,7 +103,63 @@ func (s *Store) Save(ctx context.Context, value Values) error {
 		value.LogLevel, value.MaxWebhookBodyBytes, value.MaxMessageTextBytes, value.MaxUploadRequestBytes,
 		value.MaxOutboundAttachmentBytes, value.MaxAttachmentCount, key, secret, domain,
 		boolInt(value.Configured), time.Now().UTC().UnixMilli(), time.Now().UTC().UnixMilli())
-	return err
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return errors.New("installation settings row is missing")
+	}
+	return nil
+}
+
+// CompleteSetup atomically claims the unconfigured installation, applies the
+// mailbox/user mutation, persists encrypted settings, and consumes the setup
+// token. Any failure rolls the entire first-run transition back.
+func (s *Store) CompleteSetup(ctx context.Context, token string, requireToken bool, value Values, mutate func(*sql.Tx) error) error {
+	if !value.Configured {
+		return errors.New("completed setup settings must be configured")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC()
+	var result sql.Result
+	if requireToken {
+		hash := sha256.Sum256([]byte(token))
+		result, err = tx.ExecContext(ctx, `UPDATE installation_settings
+			SET setup_token_hash = NULL, setup_token_expires_at = NULL, updated_at = ?
+			WHERE id = 1 AND configured = 0 AND setup_token_hash = ?
+				AND setup_token_expires_at IS NOT NULL AND setup_token_expires_at > ?`,
+			now.UnixMilli(), hash[:], now.UnixMilli())
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE installation_settings SET updated_at = ?
+			WHERE id = 1 AND configured = 0`, now.UnixMilli())
+	}
+	if err != nil {
+		return err
+	}
+	claimed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if claimed != 1 {
+		return ErrSetupUnavailable
+	}
+	if mutate != nil {
+		if err := mutate(tx); err != nil {
+			return err
+		}
+	}
+	if err := s.save(ctx, tx, value); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ImportLegacy fills the database once from the old environment-driven config.
@@ -110,25 +174,18 @@ func (s *Store) ImportLegacy(ctx context.Context, value Values) error {
 	return s.Save(ctx, value)
 }
 
-// EnsureSetupToken creates a short-lived single-use token for an unconfigured
-// production instance. Only its hash is persisted.
-func (s *Store) EnsureSetupToken(ctx context.Context, lifetime time.Duration) (string, bool, error) {
-	var existing []byte
-	var expires sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, "SELECT setup_token_hash, setup_token_expires_at FROM installation_settings WHERE id = 1").Scan(&existing, &expires); err != nil {
-		return "", false, err
-	}
-	if len(existing) > 0 && expires.Valid && time.Now().UnixMilli() < expires.Int64 {
-		return "", false, nil
-	}
+// RotateSetupToken creates a short-lived single-use token for an unconfigured
+// production instance. Restarting replaces the previous hash so a usable raw
+// token can always be printed again without persisting it in plaintext.
+func (s *Store) RotateSetupToken(ctx context.Context, lifetime time.Duration) (string, error) {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
-		return "", false, err
+		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	hash := sha256.Sum256([]byte(token))
 	_, err := s.db.ExecContext(ctx, `UPDATE installation_settings SET setup_token_hash = ?, setup_token_expires_at = ?, updated_at = ? WHERE id = 1`, hash[:], time.Now().Add(lifetime).UnixMilli(), time.Now().UnixMilli())
-	return token, true, err
+	return token, err
 }
 
 func (s *Store) VerifySetupToken(ctx context.Context, token string) (bool, error) {
@@ -180,3 +237,7 @@ func RedactedFingerprint(value string) string {
 }
 
 var ErrUnconfigured = errors.New("installation is not configured")
+
+// ErrSetupUnavailable means first-run setup was already completed or the
+// supplied production token was invalid, expired, or already consumed.
+var ErrSetupUnavailable = errors.New("setup is unavailable")

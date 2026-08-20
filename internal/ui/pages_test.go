@@ -61,10 +61,13 @@ func TestShortcutDialogDocumentsPrimaryNavigation(t *testing.T) {
 func TestThreadRowShowsAliasIdentity(t *testing.T) {
 	t.Parallel()
 	markup := renderComponent(t, ThreadRow(model.ThreadSummary{ID: "thread-1", Subject: "Hello", Participants: "sender@example.net", AliasAddress: "support@example.com", AliasColor: "#dcfce7"}, PageData{Mailbox: model.Mailbox{ID: "mailbox-1"}, CurrentFolder: "inbox"}))
-	for _, expected := range []string{"support@example.com", "#dcfce7", "thread-alias"} {
+	for _, expected := range []string{"support@example.com", "alias-color-2", "thread-alias"} {
 		if !strings.Contains(markup, expected) {
 			t.Fatalf("thread row omitted %q: %s", expected, markup)
 		}
+	}
+	if strings.Contains(markup, "style=") {
+		t.Fatalf("thread row contains CSP-blocked inline style: %s", markup)
 	}
 }
 

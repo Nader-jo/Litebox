@@ -233,6 +233,15 @@ func aliasPalette() []string {
 	return []string{"#e0f2fe", "#dcfce7", "#fef3c7", "#fce7f3", "#ede9fe", "#ffedd5", "#ccfbf1", "#f3e8ff"}
 }
 
+func aliasColorClass(value string) string {
+	for index, color := range aliasPalette() {
+		if color == value {
+			return fmt.Sprintf("alias-color-%d", index+1)
+		}
+	}
+	return "alias-color-1"
+}
+
 func contains(values []string, value string) bool {
 	for _, candidate := range values {
 		if candidate == value {

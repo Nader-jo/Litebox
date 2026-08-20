@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +25,12 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create database directory: %w", err)
 	}
-	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)"
+	dsn, err := SQLiteURI(path, url.Values{"_pragma": {
+		"busy_timeout(5000)", "foreign_keys(1)", "journal_mode(WAL)", "synchronous(NORMAL)", "temp_store(MEMORY)",
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("resolve SQLite path: %w", err)
+	}
 	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -37,6 +43,21 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 	return database, nil
+}
+
+// SQLiteURI converts a filesystem path into an escaped absolute file URI so
+// SQLite never interprets '?' or '#' in directory names as URI controls.
+func SQLiteURI(filePath string, parameters url.Values) (string, error) {
+	absolute, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.ToSlash(absolute)
+	if filepath.VolumeName(absolute) != "" && !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	value := &url.URL{Scheme: "file", Path: path, RawQuery: parameters.Encode()}
+	return value.String(), nil
 }
 
 // Migrate applies all embedded migrations exactly once in filename order.

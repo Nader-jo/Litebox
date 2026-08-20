@@ -15,7 +15,7 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 
 - [x] multiple independent mailboxes and aliases;
 - [x] multiple users, per-mailbox roles, mailbox switching, and session management;
-- [x] signed Linux amd64/arm64 image releases;
+- [x] provenance-attested Linux amd64/arm64 image releases;
 - [x] private local demo using the published image;
 
 ## 0.3 — Product and community experience
@@ -31,7 +31,7 @@ Litebox's roadmap favors reliability and operational simplicity over feature cou
 
 - [x] database-backed onboarding and runtime settings with encrypted provider credentials;
 - [x] multiple aliases with light, selectable colors carried into thread rows and conversation messages;
-- [x] per-admin daily or weekly metadata-only mailbox summaries with timezone and mailbox scope;
+- [x] per-user daily or weekly metadata-only mailbox summaries with timezone and mailbox scope;
 - [x] backup and restore handling for the installation master key;
 - [x] image-only, multi-platform releases for Linux amd64 and arm64.
 

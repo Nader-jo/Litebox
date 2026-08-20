@@ -28,17 +28,29 @@ func (r *Repository) CreateInvitation(ctx context.Context, createdBy, mailboxID,
 	if role != "owner" && role != "admin" && role != "member" && role != "viewer" {
 		return model.Invitation{}, fmt.Errorf("invalid invitation role")
 	}
-	if role == "owner" {
-		return model.Invitation{}, fmt.Errorf("owners must be granted by an existing owner")
-	}
-	mailbox, err := r.MailboxByID(ctx, mailboxID)
-	if err != nil {
-		return model.Invitation{}, err
-	}
 	now := time.Now().UTC()
 	invitation := model.Invitation{ID: ids.New(), Email: email, DisplayName: strings.TrimSpace(displayName), MailboxID: mailboxID,
-		MailboxName: mailbox.DisplayName, Role: role, ExpiresAt: expiresAt.UTC()}
+		Role: role, ExpiresAt: expiresAt.UTC()}
 	err = r.Transaction(ctx, func(tx *sql.Tx) error {
+		// Lock the write transaction before any authorization read so concurrent
+		// invitations serialize instead of trying to upgrade read snapshots.
+		if err := tx.QueryRowContext(ctx, `UPDATE mailboxes SET updated_at = updated_at
+			WHERE id = ? RETURNING display_name`, mailboxID).Scan(&invitation.MailboxName); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if role == "owner" {
+			var creatorRole string
+			if err := tx.QueryRowContext(ctx, `UPDATE mailbox_memberships SET updated_at = updated_at
+				WHERE mailbox_id = ? AND user_id = ? AND role = 'owner' RETURNING role`, mailboxID, createdBy).Scan(&creatorRole); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("owners must be granted by an existing owner")
+				}
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE account_tokens SET used_at = ? WHERE token_type = 'invitation' AND mailbox_id = ? AND email = ? AND used_at IS NULL`, millis(now), mailboxID, email); err != nil {
 			return err
 		}
@@ -76,8 +88,12 @@ func (r *Repository) AcceptInvitation(ctx context.Context, tokenHash []byte, pas
 	err := r.Transaction(ctx, func(tx *sql.Tx) error {
 		var invitation model.Invitation
 		var expires int64
-		if err := tx.QueryRowContext(ctx, `SELECT id, email, display_name, mailbox_id, role, expires_at
-			FROM account_tokens WHERE token_hash = ? AND token_type = 'invitation' AND used_at IS NULL AND expires_at > ?`, tokenHash, millis(now)).
+		// Claiming the token is the first statement and first write. Concurrent
+		// acceptors therefore serialize here, and a later failure rolls the claim
+		// back with every user and membership mutation.
+		if err := tx.QueryRowContext(ctx, `UPDATE account_tokens SET used_at = ?
+			WHERE token_hash = ? AND token_type = 'invitation' AND used_at IS NULL AND expires_at > ?
+			RETURNING id, email, display_name, mailbox_id, role, expires_at`, millis(now), tokenHash, millis(now)).
 			Scan(&invitation.ID, &invitation.Email, &invitation.DisplayName, &invitation.MailboxID, &invitation.Role, &expires); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrNotFound
@@ -110,8 +126,7 @@ func (r *Repository) AcceptInvitation(ctx context.Context, tokenHash []byte, pas
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, "UPDATE account_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL", millis(now), invitation.ID)
-		return err
+		return nil
 	})
 	return user, err
 }
@@ -137,17 +152,22 @@ func (r *Repository) CreatePasswordResetForUser(ctx context.Context, userID stri
 		return fmt.Errorf("invalid reset user")
 	}
 	now := time.Now().UTC()
-	var email string
-	if err := r.db.QueryRowContext(ctx, "SELECT email FROM users WHERE id = ? AND disabled_at IS NULL", userID).Scan(&email); err != nil {
+	return r.Transaction(ctx, func(tx *sql.Tx) error {
+		// Make validation the first write in the transaction. Concurrent reset
+		// issuance is thereby serialized before any existing token is invalidated.
+		var email string
+		if err := tx.QueryRowContext(ctx, `UPDATE users SET updated_at = updated_at
+			WHERE id = ? AND disabled_at IS NULL RETURNING email`, userID).Scan(&email); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE account_tokens SET used_at = ?
+			WHERE token_type = 'password_reset' AND user_id = ? AND used_at IS NULL`, millis(now), userID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO account_tokens(id, token_hash, token_type, user_id, email, expires_at, created_at)
+			VALUES (?, ?, 'password_reset', ?, ?, ?, ?)`, ids.New(), tokenHash, userID, email, millis(expiresAt), millis(now))
 		return err
-	}
-	_, err := r.db.ExecContext(ctx, `UPDATE account_tokens SET used_at = ? WHERE token_type = 'password_reset' AND user_id = ? AND used_at IS NULL`, millis(now), userID)
-	if err != nil {
-		return err
-	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO account_tokens(id, token_hash, token_type, user_id, email, expires_at, created_at)
-		VALUES (?, ?, 'password_reset', ?, ?, ?, ?)`, ids.New(), tokenHash, userID, email, millis(expiresAt), millis(now))
-	return err
+	})
 }
 
 // UserForPasswordReset returns the target user when a token is valid.
@@ -174,20 +194,53 @@ func (r *Repository) UserForPasswordReset(ctx context.Context, tokenHash []byte)
 func (r *Repository) ConsumePasswordReset(ctx context.Context, tokenHash []byte, passwordHash string) error {
 	now := millis(time.Now())
 	return r.Transaction(ctx, func(tx *sql.Tx) error {
-		var tokenID, userID string
-		if err := tx.QueryRowContext(ctx, `SELECT id, user_id FROM account_tokens WHERE token_hash = ? AND token_type = 'password_reset' AND used_at IS NULL AND expires_at > ?`, tokenHash, now).Scan(&tokenID, &userID); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return ErrNotFound
-			}
+		// Claim the presented token and invalidate every other outstanding reset
+		// token for the same user in the transaction's first write.
+		rows, err := tx.QueryContext(ctx, `UPDATE account_tokens SET used_at = ?
+			WHERE token_type = 'password_reset' AND used_at IS NULL AND user_id = (
+				SELECT user_id FROM account_tokens
+				WHERE token_hash = ? AND token_type = 'password_reset'
+					AND used_at IS NULL AND expires_at > ?
+			)
+			RETURNING user_id`, now, tokenHash, now)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND disabled_at IS NULL", passwordHash, now, userID); err != nil {
+		var userID string
+		for rows.Next() {
+			var currentUserID string
+			if err := rows.Scan(&currentUserID); err != nil {
+				rows.Close()
+				return err
+			}
+			if userID == "" {
+				userID = currentUserID
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
 			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if userID == "" {
+			return ErrNotFound
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ? AND disabled_at IS NULL", passwordHash, now, userID)
+		if err != nil {
+			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return ErrNotFound
 		}
 		if _, err := tx.ExecContext(ctx, "DELETE FROM sessions WHERE user_id = ?", userID); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "UPDATE account_tokens SET used_at = ? WHERE id = ?", now, tokenID)
-		return err
+		return nil
 	})
 }

@@ -32,8 +32,8 @@ You own a domain and want `hello@example.com`. Resend already handles the hard i
 - light, configurable alias colors shown consistently in thread rows and conversation messages;
 - single-use mailbox invitations and email-based password recovery with session revocation;
 - per-user daily or weekly private summaries with counts by mailbox and no message content;
-- database-backed installation settings with encrypted Resend credentials and a one-time setup link;
-- one signed, shell-free multi-platform GHCR image that runs on Linux AMD64 and ARM64 VPS hosts;
+- database-backed installation settings with encrypted Resend credentials and a restart-rotated first-run setup link;
+- one provenance-attested, shell-free multi-platform GHCR image that runs on Linux AMD64 and ARM64 VPS hosts;
 - built-in `doctor`, `backup`, `restore`, `reindex`, and password-recovery commands;
 - responsive server-rendered UI using Go, templ, vendored HTMX, and custom CSS.
 - mobile search, keyboard navigation, shortcut help, and clear progress/confirmation feedback.
@@ -46,7 +46,6 @@ Start a private local demo with one command. It needs only Docker, binds to
 `127.0.0.1`, and does not require a domain or Resend account:
 
 ```bash
-docker volume create litebox-demo-data
 docker run --rm --name litebox-demo \
   -p 127.0.0.1:8080:8080 \
   -e APP_ENV=development \
@@ -55,9 +54,11 @@ docker run --rm --name litebox-demo \
   ghcr.io/nader-jo/litebox:0.4.1
 ```
 
-Open <http://localhost:8080/setup>. Stop the demo with `Ctrl-C`; demo data
-remains in the `litebox-demo-data` Docker volume until you delete it. Real email
-receiving and sending are disabled in development mode.
+Open <http://localhost:8080/setup>. Stop the demo with `Ctrl-C`; Docker creates
+the named volume automatically, and demo data remains there until you delete
+it. This credential-free example cannot send or receive real email. Development
+mode is not a provider safety switch: adding valid Resend credentials enables
+provider workflows, so use a dedicated test account and domain.
 
 ## Architecture
 
@@ -96,26 +97,48 @@ Read [Architecture](docs/ARCHITECTURE.md) for invariants, module boundaries, dat
 ### 1. Pull the multi-platform image
 
 ```bash
-git clone --depth 1 --branch v0.4.1 https://github.com/Nader-jo/Litebox.git
+git clone --depth 1 https://github.com/Nader-jo/Litebox.git
 cd Litebox
 cp .env.example .env
-# Set LITEBOX_DOMAIN to the public HTTPS hostname before starting Compose.
-docker compose pull
-docker compose up -d
+# Set LITEBOX_DOMAIN and keep this explicit image pin in .env:
+# LITEBOX_IMAGE=ghcr.io/nader-jo/litebox:0.4.1
+docker compose --profile proxy pull
+docker compose --profile proxy up -d
 ```
 
 Docker automatically selects the `linux/amd64` or `linux/arm64` image from the
-immutable release tag. The repository checkout supplies only the deployment
+immutable image tag. The repository checkout supplies only the deployment
 templates (`compose.yaml`, `Caddyfile`, and `.env.example`); the application
 itself always runs from GHCR.
+
+> [!NOTE]
+> The immutable `v0.4.1` source tag contains deployment-template defaults that
+> can resolve to `latest`. For that release, use the corrected current templates
+> above and retain the explicit `0.4.1` image pin. The tag will not be rewritten;
+> the next release returns to using its matching source tag and image tag.
+
+The commands above enable the supplied Caddy HTTPS profile. If an existing
+reverse proxy already terminates TLS, run `docker compose pull` and
+`docker compose up -d` instead, then proxy the public hostname to
+`127.0.0.1:8080`.
 
 To build from source for development instead, follow the [Development guide](docs/DEVELOPMENT.md) and use `compose.build.yaml`.
 
 ### 2. Complete the first-run wizard
 
-Open the one-time `/setup?token=…` URL printed by the container. The wizard stores the mailbox identity, public URL, Resend credentials, and first administrator in SQLite. The token is invalidated after completion. Add more people and assign per-mailbox roles from **Settings → People**.
+Open the `/setup?token=…` URL printed by the container. The wizard stores the
+mailbox identity, public URL, Resend credentials, and first administrator in
+SQLite. Each unconfigured production startup rotates and prints a fresh token;
+the previous URL stops working, and setup completion invalidates the current
+token permanently. Setup commits the token claim, mailbox, first owner, and
+encrypted settings atomically, so a failed or concurrent submission cannot
+leave a partial installation. Add more people and assign per-mailbox roles from
+**Settings → People**.
 
-For headless setup:
+`create-admin` is an administrator-recovery/bootstrap command, not a complete
+headless replacement for the wizard. It creates a login but does not save the
+public URL or provider credentials. Use it only after supplying the documented
+legacy bootstrap settings or complete **Settings → System** immediately:
 
 ```bash
 docker compose exec mailbox /app/litebox create-admin \
@@ -142,6 +165,7 @@ Published images are available at `ghcr.io/nader-jo/litebox`. Production deploym
 The image uses the same binary for the server and all administrative operations:
 
 ```text
+litebox help [command]
 litebox serve
 litebox migrate
 litebox healthcheck
@@ -154,10 +178,23 @@ litebox reindex
 litebox version
 ```
 
+`help`, `--help`, `version`, and `--version` are handled before configuration or
+application initialization, so inspecting the CLI never creates or migrates
+data. Unknown commands, invalid flags, missing required options, and unexpected
+positional arguments also fail before application startup.
+`migrate` opens only the configured SQLite database and applies embedded
+migrations; it does not create the master key or mailbox, initialize the
+provider or blob store, enqueue jobs, or start the server. Commands that inspect
+mailbox data require the matching master key and storage configuration. See
+[Configuration](docs/CONFIGURATION.md) for defaults, validation, and setting
+lifecycle.
+
 ### Health
 
 - `GET /health/live` checks the process only.
-- `GET /health/ready` checks SQLite and private blob storage, but deliberately does not depend on Resend availability.
+- `GET /health/ready` checks SQLite and writable private blob/storage-temp
+  directories, caches the deep-probe result for five seconds to bound I/O, and
+  deliberately does not depend on Resend availability.
 - `/admin/system` shows recent verified webhooks, job state, storage health, and database size without exposing secrets.
 
 ### Mailboxes, aliases, and access
@@ -173,7 +210,7 @@ litebox version
 
 See [Multi-mailbox access](docs/MULTI_MAILBOX.md) for role semantics, routing behavior, and migration details.
 
-Runtime settings, encrypted secrets, setup-token recovery, alias colors, and summaries are covered in the [User guide](docs/USER_GUIDE.md).
+Mailbox use, alias colors, and summaries are covered in the [User guide](docs/USER_GUIDE.md). Operators should use [Configuration](docs/CONFIGURATION.md) for runtime settings, encrypted secrets, and setup-token recovery.
 
 ### Backups
 
@@ -188,7 +225,13 @@ docker compose run --rm -v /srv/litebox-backups:/backup mailbox \
 docker compose start mailbox
 ```
 
-Every backup contains a consistent SQLite snapshot plus a manifest of logical blob keys, sizes, and SHA-256 hashes. A missing referenced blob fails the backup. Restore refuses to overwrite an existing installation.
+Every backup contains a consistent SQLite snapshot, the matching instance
+master key, and a manifest containing database/key metadata plus every logical
+blob key, size, and SHA-256 hash. A missing referenced blob fails the backup.
+Restore validates the complete manifest and refuses to overwrite an existing
+installation. Manifest hashes detect corruption and mismatch but do not
+authenticate an archive; protect backups against replacement and restore only
+from a trusted source.
 
 Read [Backup and restore](docs/BACKUP_AND_RESTORE.md) before relying on it.
 
@@ -209,7 +252,10 @@ after:2026-01-01
 before:2026-08-01
 ```
 
-Malformed dates and unsupported structured filters produce a visible error; they are never silently ignored or interpolated into SQL.
+Malformed values for a recognized filter produce a visible error. An
+unrecognized colon term such as `label:finance` is searched literally rather
+than treated as an undocumented filter; user input is never interpolated into
+SQL. Search excludes Trash.
 
 ## Security model
 
@@ -230,7 +276,10 @@ Review [SECURITY.md](SECURITY.md) for reporting and supported versions, and [Thr
 
 ## Development
 
-Requirements: Go 1.26.6+, Docker, and GNU Make (optional). The patch-level floor includes required Go standard-library security fixes.
+Requirements: Go 1.26.6+, Docker, and GNU Make (optional). Make targets also use
+POSIX shell utilities such as Bash, `test`, and `rm`; on Windows use WSL, MSYS2,
+or Git Bash, or run the underlying Go and Docker commands directly. The
+patch-level Go floor includes required standard-library security fixes.
 
 ```bash
 make setup # install pinned tools, generate code, and validate the checkout
@@ -252,7 +301,8 @@ See [Development guide](docs/DEVELOPMENT.md) for package boundaries, tests, fake
 | Document | Audience |
 | --- | --- |
 | [Architecture](docs/ARCHITECTURE.md) | Maintainers and integrators |
-| [Product requirements](mailbox_prd.md) | Product and architecture context |
+| [Historical product requirements](mailbox_prd.md) | Historical product and architecture context |
+| [Configuration](docs/CONFIGURATION.md) | Operators and deployers |
 | [Multi-mailbox access](docs/MULTI_MAILBOX.md) | Operators and administrators |
 | [User guide](docs/USER_GUIDE.md) | Mailbox users |
 | [Deployment](docs/DEPLOYMENT.md) | Operators |
