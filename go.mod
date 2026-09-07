@@ -5,7 +5,7 @@ go 1.26.6
 require (
 	github.com/a-h/templ v0.3.1020
 	github.com/microcosm-cc/bluemonday v1.0.27
-	github.com/resend/resend-go/v3 v3.16.0
+	github.com/resend/resend-go/v3 v3.17.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0
 	golang.org/x/term v0.45.0
